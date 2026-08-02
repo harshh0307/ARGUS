@@ -22,3 +22,11 @@ def test_unknown_vendor_returns_empty(tmp_path):
     store = SnapshotStore(tmp_path)
     assert store.latest("nope") is None
     assert store.list_digests("nope") == []
+
+
+def test_pin_and_pinned(tmp_path):
+    store = SnapshotStore(tmp_path)
+    digest = store.pin("github", "old", {"a": 1})
+
+    assert store.pinned("github", "old") == {"digest": digest, "content": {"a": 1}}
+    assert store.pinned("github", "nope") is None
