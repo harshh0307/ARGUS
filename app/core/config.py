@@ -1,0 +1,26 @@
+from functools import lru_cache
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+
+    github_spec_url: str = (
+        "https://raw.githubusercontent.com/github/rest-api-description/main/"
+        "descriptions/api.github.com/api.github.com.json"
+    )
+    github_old_spec_url: str = (
+        "https://raw.githubusercontent.com/github/rest-api-description/"
+        "04fd6c592fc546217404b07e0b0e581fb00a963a/"
+        "descriptions/api.github.com/api.github.com.json"
+    )
+    snapshot_dir: str = "data/snapshots"
+    http_timeout_seconds: float = 30.0
+    http_max_retries: int = 3
+    http_backoff_base_seconds: float = 1.0
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
