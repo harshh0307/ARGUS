@@ -16,9 +16,15 @@ class Settings(BaseSettings):
         "descriptions/api.github.com/api.github.com.json"
     )
     snapshot_dir: str = "data/snapshots"
+    github_token: str | None = None
     http_timeout_seconds: float = 30.0
     http_max_retries: int = 3
     http_backoff_base_seconds: float = 1.0
+    openai_api_key: str | None = None
+    gemini_api_key: str | None = None
+    llm_model: str = "gpt-4o-mini"
+    llm_base_url: str | None = None
+    fix_max_attempts: int = 3
 
 
 @lru_cache
