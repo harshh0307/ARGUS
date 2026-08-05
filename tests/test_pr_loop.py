@@ -36,10 +36,11 @@ class FakeGitHub:
         self.pushes = []
         self.files = {}
         self.branch_created = False
+        self.head = "head-1"
         self.pr = PullRequest(number=1, head_sha="head-1", html_url="https://github.com/o/r/pull/1")
 
     def branch_head_sha(self, owner, repo, branch):
-        return "base-sha"
+        return "base-sha" if branch == "main" else self.head
 
     def get_ref(self, owner, repo, branch):
         return None if not self.branch_created else "base-sha"
@@ -53,15 +54,14 @@ class FakeGitHub:
     def create_file(self, owner, repo, path, message, content, branch):
         self.files[path] = {"content": content, "sha": f"sha-{len(self.files)}"}
         self.pushes.append((path, content, message))
+        self.head = f"head-{len(self.pushes) + 1}"
 
     def update_file(self, owner, repo, path, message, content, sha, branch):
         self.files[path] = {"content": content, "sha": f"sha-{len(self.files)}"}
         self.pushes.append((path, content, message))
+        self.head = f"head-{len(self.pushes) + 1}"
 
     def open_pull_request(self, owner, repo, title, head, base, body):
-        return self.pr
-
-    def get_pull(self, owner, repo, number):
         return self.pr
 
     def check_runs(self, owner, repo, ref):
@@ -126,6 +126,7 @@ def test_ci_fail_then_fix_loop():
     assert result.passed
     assert result.attempts == 2
     assert "branches" in fake.files["app.py"]["content"]
+    assert "branches" in fake.pushes[0][1]
     assert len(fake.pushes) == 2
     assert any("CI failed on attempt 1" in c for c in fake.comments)
     assert "NameError" in fake.comments[0]

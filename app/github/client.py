@@ -146,12 +146,17 @@ class GitHubClient:
         runs = self._request(
             "GET",
             f"/repos/{owner}/{repo}/actions/runs",
-            params={"head_sha": ref, "status": "failure", "per_page": 1},
+            params={"head_sha": ref, "status": "completed", "per_page": 5},
         )
         if not runs or not runs.get("workflow_runs"):
             return None
-        run_id = runs["workflow_runs"][0]["id"]
-        jobs = self._request("GET", f"/repos/{owner}/{repo}/actions/runs/{run_id}/jobs")
+        run = next(
+            (item for item in runs["workflow_runs"] if item.get("conclusion") == "failure"),
+            None,
+        )
+        if run is None:
+            return None
+        jobs = self._request("GET", f"/repos/{owner}/{repo}/actions/runs/{run['id']}/jobs")
         if not jobs or not jobs.get("jobs"):
             return None
         job_id = None
@@ -169,3 +174,43 @@ class GitHubClient:
             f"/repos/{owner}/{repo}/issues/{number}/comments",
             json={"body": body},
         )
+
+    def get_repo_info(self, owner: str, repo: str) -> dict | None:
+        return self._request("GET", f"/repos/{owner}/{repo}")
+
+    def repo_exists(self, owner: str, repo: str) -> bool:
+        return self.get_repo_info(owner, repo) is not None
+
+    def create_repo(
+        self, name: str, private: bool = False, description: str = "", auto_init: bool = True
+    ) -> dict:
+        data = self._request(
+            "POST",
+            "/user/repos",
+            json={
+                "name": name,
+                "private": private,
+                "description": description,
+                "auto_init": auto_init,
+            },
+        )
+        return data or {}
+
+    def delete_repo(self, owner: str, repo: str) -> None:
+        self._request("DELETE", f"/repos/{owner}/{repo}")
+
+    def find_open_pull(self, owner: str, repo: str, head: str) -> int | None:
+        data = self._request(
+            "GET",
+            f"/repos/{owner}/{repo}/pulls",
+            params={"state": "open", "head": f"{owner}:{head}", "per_page": 10},
+        )
+        if not data:
+            return None
+        return data[0]["number"]
+
+    def close_pull(self, owner: str, repo: str, number: int) -> None:
+        self._request("PATCH", f"/repos/{owner}/{repo}/pulls/{number}", json={"state": "closed"})
+
+    def delete_branch(self, owner: str, repo: str, branch: str) -> None:
+        self._request("DELETE", f"/repos/{owner}/{repo}/git/refs/heads/{branch}")

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 from app.fix.agent import fix_impact_on_content
 from app.github.ci import CiTimeoutError, failure_message, wait_for_checks
+from app.github.client import GitHubApiError
 
 
 @dataclass(frozen=True)
@@ -13,6 +15,21 @@ class PRLoopResult:
     passed: bool
     attempts: int
     failure: str | None = None
+
+
+def _branch_head(
+    client, owner: str, repo: str, branch: str, prev_sha: str, max_wait: float = 30.0
+) -> str:
+    deadline = time.monotonic() + max_wait
+    while time.monotonic() < deadline:
+        try:
+            sha = client.branch_head_sha(owner, repo, branch)
+        except GitHubApiError:
+            sha = prev_sha
+        if sha != prev_sha:
+            return sha
+        time.sleep(2)
+    return prev_sha
 
 
 def push_files(
@@ -51,12 +68,24 @@ def run_pr_loop(
     base_sha = client.branch_head_sha(owner, repo, base)
     if client.get_ref(owner, repo, branch) is None:
         client.create_branch(owner, repo, branch, base_sha)
+
+    for impact in impacts:
+        content = files.get(impact.usage.file)
+        if content is None:
+            continue
+        fixed, _ = fix_impact_on_content(
+            impact, impact.usage.file, content, suggestion_model, previous_error=None
+        )
+        if fixed is not None:
+            files[impact.usage.file] = fixed
+
     push_files(client, owner, repo, branch, files, f"{title} [initial fix]")
     pr = client.open_pull_request(owner, repo, title, branch, base, body)
+    head_sha = pr.head_sha
 
     for attempt in range(1, max_attempts + 1):
         try:
-            checks = wait_for_checks(client, owner, repo, pr.head_sha, check_timeout, check_interval)
+            checks = wait_for_checks(client, owner, repo, head_sha, check_timeout, check_interval)
         except CiTimeoutError as exc:
             client.pr_comment(
                 owner, repo, pr.number, f"argus: giving up after {attempt} attempt(s).\n\n{exc}"
@@ -66,7 +95,7 @@ def run_pr_loop(
         if not failed:
             return PRLoopResult(pr.number, pr.html_url, passed=True, attempts=attempt)
 
-        msg = failure_message(client, owner, repo, pr.head_sha, checks)
+        msg = failure_message(client, owner, repo, head_sha, checks)
         if attempt == max_attempts:
             client.pr_comment(
                 owner, repo, pr.number, f"argus: giving up after {attempt} attempt(s).\n\n{msg}"
@@ -91,6 +120,6 @@ def run_pr_loop(
                     owner, repo, pr.number, f"argus: fix agent failed on {path} (attempt {attempt}): {err}"
                 )
         push_files(client, owner, repo, branch, files, f"{title} [attempt {attempt + 1}]")
-        pr = client.get_pull(owner, repo, pr.number)
+        head_sha = _branch_head(client, owner, repo, branch, head_sha)
 
     return PRLoopResult(pr.number, pr.html_url, passed=False, attempts=max_attempts, failure="unreachable")

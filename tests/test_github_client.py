@@ -112,3 +112,86 @@ def test_error_raises_on_server_error():
         assert False, "expected GitHubApiError"
     except GitHubApiError as exc:
         assert "500" in str(exc)
+
+
+def test_repo_exists():
+    def handler(request):
+        if str(request.url).endswith("/missing"):
+            return httpx.Response(404, json={"message": "Not Found"})
+        return httpx.Response(200, json={"full_name": "o/r"})
+
+    client = make_client(handler)
+    assert client.repo_exists("o", "r")
+    assert not client.repo_exists("o", "missing")
+
+
+def test_create_repo_payload():
+    captured = {}
+
+    def handler(request):
+        captured["json"] = json.loads(request.content)
+        return httpx.Response(201, json={})
+
+    client = make_client(handler)
+    client.create_repo("demo", private=False, description="demo repo")
+    assert captured["json"] == {
+        "name": "demo",
+        "private": False,
+        "description": "demo repo",
+        "auto_init": True,
+    }
+
+
+def test_delete_repo_sends_delete():
+    seen = {}
+
+    def handler(request):
+        seen["method"] = request.method
+        return httpx.Response(204)
+
+    client = make_client(handler)
+    client.delete_repo("o", "r")
+    assert seen["method"] == "DELETE"
+
+
+def test_failure_log_picks_failed_run_and_returns_text():
+    calls = []
+
+    def handler(request):
+        url = str(request.url)
+        calls.append(url)
+        if url.endswith("/logs"):
+            return httpx.Response(200, text="log line 1\nlog line 2")
+        if "/jobs" in url:
+            return httpx.Response(200, json={"jobs": [{"id": 10, "name": "check"}]})
+        return httpx.Response(
+            200,
+            json={
+                "workflow_runs": [
+                    {"id": 1, "conclusion": "success"},
+                    {"id": 2, "conclusion": "failure"},
+                ]
+            },
+        )
+
+    client = make_client(handler)
+    log = client.failure_log("o", "r", "abc123", "check")
+    assert log == "log line 1\nlog line 2"
+    assert "status=completed" in calls[0]
+    assert "/actions/runs/2/jobs" in calls[1]
+
+
+def test_find_open_pull_returns_first_number():
+    def handler(request):
+        return httpx.Response(200, json=[{"number": 9}, {"number": 12}])
+
+    client = make_client(handler)
+    assert client.find_open_pull("o", "r", "argus/fix") == 9
+
+
+def test_find_open_pull_returns_none_when_empty():
+    def handler(request):
+        return httpx.Response(200, json=[])
+
+    client = make_client(handler)
+    assert client.find_open_pull("o", "r", "argus/fix") is None
