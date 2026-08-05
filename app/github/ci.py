@@ -27,6 +27,20 @@ def wait_for_checks(
         time.sleep(interval)
 
 
+def _error_window(log: str, max_chars: int) -> str:
+    lines = log.splitlines()
+    marks = [
+        i
+        for i, line in enumerate(lines)
+        if "##[error]" in line or "Traceback" in line or "Error:" in line
+    ]
+    if not marks:
+        return log[-max_chars:]
+    start = max(0, marks[0] - 5)
+    end = marks[-1] + 1
+    return "\n".join(lines[start:end])[-max_chars:]
+
+
 def failure_message(
     client,
     owner: str,
@@ -42,7 +56,7 @@ def failure_message(
     for check in failed:
         log = client.failure_log(owner, repo, ref, check.name)
         if log:
-            chunks.append(f"### {check.name}\n{log[-max_chars:]}")
+            chunks.append(f"### {check.name}\n{_error_window(log, max_chars)}")
         else:
             chunks.append(f"### {check.name}\n(no log available)")
     return "\n\n".join(chunks)

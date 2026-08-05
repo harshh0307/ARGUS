@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     http_backoff_base_seconds: float = 1.0
     openai_api_key: str | None = None
     gemini_api_key: str | None = None
+    openrouter_api_key: str | None = None
+    openrouter_model: str | None = None
     llm_model: str = "gpt-4o-mini"
     llm_base_url: str | None = None
     fix_max_attempts: int = 3

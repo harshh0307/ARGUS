@@ -64,3 +64,20 @@ def test_failure_message_reports_missing_log():
     checks = [check("ci", "completed", "failure")]
     msg = failure_message(client, "o", "r", "head-1", checks)
     assert "no log available" in msg
+
+
+def test_failure_message_windows_around_error_marker():
+    client = FakeCiClient([])
+    log = (
+        "pre\n" * 40
+        + "2026-08-05T08:00:00Z Traceback (most recent call last):\n"
+        + "2026-08-05T08:00:00Z ImportError: cannot import name 'x'\n"
+        + "2026-08-05T08:00:00Z ##[error]Process completed with exit code 1.\n"
+        + "cleanup noise\n" * 40
+    )
+    client.log = log
+    checks = [check("ci", "completed", "failure")]
+    msg = failure_message(client, "o", "r", "head-1", checks)
+    assert "ImportError" in msg
+    assert "##[error]" in msg
+    assert "cleanup noise" not in msg

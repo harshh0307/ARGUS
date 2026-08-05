@@ -33,7 +33,15 @@ class FixState(TypedDict, total=False):
 
 
 class SuggestionModel:
-    def __init__(self, api_key: str, model_name: str = "gpt-4o-mini", base_url: str | None = None):
+    def __init__(
+        self,
+        api_key: str,
+        model_name: str = "gpt-4o-mini",
+        base_url: str | None = None,
+        fallback_api_key: str | None = None,
+        fallback_model: str | None = None,
+        fallback_base_url: str | None = None,
+    ):
         if not api_key:
             raise ValueError("an API key is required to build a SuggestionModel")
         from langchain_openai import ChatOpenAI
@@ -42,6 +50,12 @@ class SuggestionModel:
         if base_url:
             kwargs["base_url"] = base_url
         self._llm = ChatOpenAI(**kwargs).with_structured_output(PatchSuggestion)
+        self._fallback = None
+        if fallback_api_key:
+            fkwargs = {"model": fallback_model, "api_key": fallback_api_key, "temperature": 0}
+            if fallback_base_url:
+                fkwargs["base_url"] = fallback_base_url
+            self._fallback = ChatOpenAI(**fkwargs).with_structured_output(PatchSuggestion)
 
     def suggest(self, prompt: str) -> PatchSuggestion:
         max_retries = 3
@@ -50,6 +64,8 @@ class SuggestionModel:
                 return self._llm.invoke(prompt)
             except Exception as exc:
                 if "429" not in str(exc) or attempt == max_retries - 1:
+                    if self._fallback is not None:
+                        return self._fallback.invoke(prompt)
                     raise
                 time.sleep(_retry_delay(exc, attempt))
         raise RuntimeError("unreachable")
@@ -61,6 +77,9 @@ def build_suggestion_model(settings: Settings) -> SuggestionModel:
         api_key=api_key,
         model_name=settings.llm_model,
         base_url=settings.llm_base_url,
+        fallback_api_key=settings.openrouter_api_key,
+        fallback_model=settings.openrouter_model or "openai/gpt-oss-20b:free",
+        fallback_base_url="https://openrouter.ai/api/v1",
     )
 
 
