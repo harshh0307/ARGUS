@@ -179,6 +179,15 @@ class GitHubClient:
     def get_repo_info(self, owner: str, repo: str) -> dict | None:
         return self._request("GET", f"/repos/{owner}/{repo}")
 
+    def repo_tarball(self, owner: str, repo: str, ref: str | None = None) -> bytes:
+        params = {}
+        if ref:
+            params["ref"] = ref
+        response = self._client.get(f"{self._base_url}/repos/{owner}/{repo}/tarball", params=params)
+        if response.status_code >= 400:
+            raise GitHubApiError(f"GET tarball {owner}/{repo} -> {response.status_code}")
+        return response.content
+
     def repo_exists(self, owner: str, repo: str) -> bool:
         return self.get_repo_info(owner, repo) is not None
 

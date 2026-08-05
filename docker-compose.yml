@@ -1,0 +1,8 @@
+services:
+  argus:
+    build: .
+    image: argus:local
+    env_file: .env
+    volumes:
+      - ./repos:/repos:ro
+    command: ["scan", "/repos"]

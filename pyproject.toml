@@ -18,6 +18,9 @@ dev = [
     "ruff>=0.9",
 ]
 
+[project.scripts]
+argus = "app.cli:main"
+
 [tool.setuptools.packages.find]
 include = ["app*"]
 

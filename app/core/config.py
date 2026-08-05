@@ -16,6 +16,7 @@ class Settings(BaseSettings):
         "descriptions/api.github.com/api.github.com.json"
     )
     snapshot_dir: str = "data/snapshots"
+    api_base_url: str = "https://api.github.com"
     github_token: str | None = None
     http_timeout_seconds: float = 30.0
     http_max_retries: int = 3

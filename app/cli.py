@@ -1,0 +1,256 @@
+"""Argus command line interface.
+
+Usage:
+  argus detect                 Detect breaking API changes in the watched spec
+  argus scan [DIR]             Scan a repo for call sites hit by breaking changes
+  argus fix [DIR]              Generate and apply LLM fixes for impacted call sites
+  argus pr OWNER/REPO          Full pipeline: detect, scan, fix, open a self-healing PR
+"""
+
+from __future__ import annotations
+
+import argparse
+import difflib
+import io
+import sys
+import tarfile
+import tempfile
+from contextlib import chdir
+from pathlib import Path
+
+from app.core.config import get_settings
+from app.detection.detect import run_detection
+from app.detection.models import ADDITIVE, BREAKING
+from app.fix.agent import build_suggestion_model, fix_impact_on_content, run_fix
+from app.github.client import GitHubApiError, GitHubClient
+from app.github.pr import PRLoopResult, build_pr_body, run_pr_loop
+from app.ingestion.fetcher import SpecFetchError
+from app.scan.impact import assess_impact
+from app.scan.scanner import ApiScanner
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="argus",
+        description="Argus - the changelog that reads your codebase.",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("detect", help="detect breaking API changes in the watched spec")
+    p.set_defaults(func=cmd_detect)
+
+    p = sub.add_parser("scan", help="scan a repo for call sites hit by breaking changes")
+    p.add_argument("dir", nargs="?", default=".", help="repo directory to scan (default: .)")
+    p.set_defaults(func=cmd_scan)
+
+    p = sub.add_parser("fix", help="generate and apply LLM fixes for impacted call sites")
+    p.add_argument("dir", nargs="?", default=".", help="repo directory to fix (default: .)")
+    p.add_argument("--dry-run", action="store_true", help="print diffs without writing files")
+    p.add_argument("--max-attempts", type=int, default=None, help="fix attempts per call site")
+    p.set_defaults(func=cmd_fix)
+
+    p = sub.add_parser("pr", help="detect, scan, fix and open a self-healing PR")
+    p.add_argument("repo", help="target repo as OWNER/REPO")
+    p.add_argument("--dir", default=None, help="local checkout to scan (default: API tarball)")
+    p.add_argument("--base", default=None, help="base branch (default: repo default branch)")
+    p.add_argument("--branch", default="argus/fix", help="fix branch to create")
+    p.add_argument("--max-attempts", type=int, default=None, help="CI feedback loop attempts")
+    p.add_argument("--check-timeout", type=float, default=None, help="seconds to wait per check")
+    p.set_defaults(func=cmd_pr)
+
+    return parser
+
+
+def _print_changes(changes: list) -> None:
+    breaking = [c for c in changes if c.severity == BREAKING]
+    additive = [c for c in changes if c.severity == ADDITIVE]
+    for change in breaking:
+        detail = f" - {change.detail}" if change.detail else ""
+        print(f"  [{change.kind}] {change.method.upper()} {change.path}{detail}")
+    print(f"{len(breaking)} breaking, {len(additive)} additive changes")
+
+
+def cmd_detect(args) -> int:
+    detection = run_detection(get_settings())
+    print("Argus detected API changes in the watched spec:")
+    _print_changes(detection["changes"])
+    return 0
+
+
+def cmd_scan(args) -> int:
+    settings = get_settings()
+    detection = run_detection(settings)
+    usages = ApiScanner(base_url=settings.api_base_url).scan(args.dir)
+    impacts = assess_impact(usages, detection["changes"])
+    print(f"Scanned {args.dir}: {len(usages)} call sites, {len(impacts)} impacted by breaking changes")
+    for impact in impacts:
+        print(f"  {impact}")
+    return 0
+
+
+def _unified_diff(file: str, before: str, after: str) -> str:
+    diff = difflib.unified_diff(
+        before.splitlines(),
+        after.splitlines(),
+        fromfile=file,
+        tofile=file,
+        lineterm="",
+    )
+    return "\n".join(diff)
+
+
+def cmd_fix(args) -> int:
+    settings = get_settings()
+    detection = run_detection(settings)
+    usages = ApiScanner(base_url=settings.api_base_url).scan(args.dir)
+    impacts = assess_impact(usages, detection["changes"])
+    if not impacts:
+        print("no impacted call sites")
+        return 0
+    try:
+        model = build_suggestion_model(settings)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    max_attempts = args.max_attempts or settings.fix_max_attempts
+    root = Path(args.dir)
+
+    if args.dry_run:
+        contents: dict[str, str] = {}
+        fixed_count = 0
+        for impact in impacts:
+            path = root / impact.usage.file
+            if path not in contents:
+                contents[path] = path.read_text(encoding="utf-8-sig")
+            patched, err = fix_impact_on_content(
+                impact, impact.usage.file, contents[path], model, max_attempts=max_attempts
+            )
+            if patched is None:
+                print(f"  {impact.usage.file}:{impact.usage.line} FAILED: {err}")
+                continue
+            print(f"  {impact.usage.file}:{impact.usage.line} OK")
+            print(_unified_diff(str(path), contents[path], patched))
+            contents[path] = patched
+            fixed_count += 1
+        print(f"{fixed_count}/{len(impacts)} fixed (dry run)")
+        return 0
+
+    with chdir(root):
+        results = run_fix(impacts, model, max_attempts)
+    fixed = sum(1 for r in results if r.success)
+    for result in results:
+        if result.success:
+            print(f"  {result.file}:{result.line} OK")
+        else:
+            print(f"  {result.file}:{result.line} FAILED: {result.error}")
+    print(f"{fixed}/{len(results)} fixed")
+    return 0
+
+
+def _extract_tarball(data: bytes, dest: Path) -> None:
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+        for member in tar.getmembers():
+            parts = Path(member.name).parts[1:]
+            if not parts:
+                continue
+            member.name = str(Path(*parts))
+        tar.extractall(dest, filter="data")
+
+
+def cmd_pr(args) -> int:
+    settings = get_settings()
+    if not settings.github_token:
+        print("error: GITHUB_TOKEN is not set", file=sys.stderr)
+        return 2
+    owner, sep, repo = args.repo.partition("/")
+    if not sep or not repo:
+        print(f"error: expected OWNER/REPO, got {args.repo!r}", file=sys.stderr)
+        return 2
+
+    client = GitHubClient(token=settings.github_token)
+    info = client.get_repo_info(owner, repo)
+    if info is None:
+        print(f"error: repo {owner}/{repo} not found", file=sys.stderr)
+        return 2
+    base = args.base or info["default_branch"]
+
+    detection = run_detection(settings)
+    print("Argus detected API changes in the watched spec:")
+    _print_changes(detection["changes"])
+
+    with tempfile.TemporaryDirectory() as tmp:
+        if args.dir:
+            root = Path(args.dir)
+        else:
+            root = Path(tmp) / "checkout"
+            root.mkdir(parents=True)
+            print(f"fetching {owner}/{repo}@{base}...")
+            _extract_tarball(client.repo_tarball(owner, repo, base), root)
+
+        usages = ApiScanner(base_url=settings.api_base_url).scan(root)
+        impacts = assess_impact(usages, detection["changes"])
+        if not impacts:
+            print("no impacted call sites; nothing to do")
+            return 0
+        print(f"Scanned {owner}/{repo}: {len(usages)} call sites, {len(impacts)} impacted")
+        for impact in impacts:
+            print(f"  {impact}")
+
+        files = {}
+        for impact in impacts:
+            path = root / impact.usage.file
+            if path not in files:
+                files[impact.usage.file] = path.read_text(encoding="utf-8-sig")
+
+        stale = client.find_open_pull(owner, repo, args.branch)
+        if stale is not None:
+            print(f"closing stale PR #{stale} for {args.branch}")
+            client.close_pull(owner, repo, stale)
+        if client.get_ref(owner, repo, args.branch) is not None:
+            print(f"deleting stale branch {args.branch}")
+            client.delete_branch(owner, repo, args.branch)
+
+        try:
+            model = build_suggestion_model(settings)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        body = build_pr_body(
+            f"Argus found {len(impacts)} breaking API change(s) in this repo.",
+            [f"{i.change.method.upper()} {i.change.path}: {i.change.detail}" for i in impacts],
+        )
+        result: PRLoopResult = run_pr_loop(
+            client,
+            owner,
+            repo,
+            base=base,
+            branch=args.branch,
+            files=files,
+            impacts=impacts,
+            suggestion_model=model,
+            max_attempts=args.max_attempts or settings.fix_max_attempts,
+            check_timeout=args.check_timeout or 600.0,
+            check_interval=15.0,
+            body=body,
+        )
+        print(f"PR #{result.pr_number}: {result.pr_url}")
+        print(f"passed={result.passed} attempts={result.attempts}")
+        if result.failure:
+            print(f"last failure: {result.failure[:500]}")
+        return 0 if result.passed else 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    try:
+        return args.func(args)
+    except (SpecFetchError, GitHubApiError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("interrupted", file=sys.stderr)
+        return 130
+
+
+if __name__ == "__main__":
+    sys.exit(main())
