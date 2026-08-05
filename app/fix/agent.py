@@ -101,6 +101,28 @@ def impact_to_dict(impact) -> dict:
     }
 
 
+def fix_impact_on_content(
+    impact,
+    file_path: str,
+    content: str,
+    suggestion_model,
+    previous_error: str | None = None,
+    max_attempts: int = 3,
+) -> tuple[str | None, str | None]:
+    graph = build_fix_graph(suggestion_model, max_attempts)
+    final = graph.invoke(
+        {
+            "impact": impact_to_dict(impact),
+            "file_path": file_path,
+            "file_content": content,
+            "error": previous_error,
+            "attempts": 0,
+        }
+    )
+    success = final.get("error") is None and final.get("patched_content") is not None
+    return (final.get("patched_content"), None) if success else (None, final.get("error"))
+
+
 def run_fix(impacts, suggestion_model, max_attempts: int = 3) -> list[FixResult]:
     graph = build_fix_graph(suggestion_model, max_attempts)
     contents: dict[str, str] = {}
