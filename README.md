@@ -2,7 +2,7 @@
 
 **The changelog that reads your codebase.**
 
-Argus watches API vendors (Stripe, Twilio, GitHub...) by diffing their OpenAPI specs, scans your repositories for affected call sites, and automatically opens a pull request with the fix.
+Argus watches API vendors (Stripe, Twilio, GitHub...) by diffing their OpenAPI specs, scans your repositories for affected call sites, fixes them with an LLM agent, and opens a self-healing pull request.
 
 > "API providers shouldn't just announce changes; they should apply them."
 > When an API ships a breaking change, an agent should scan customer codebases, identify affected usages, and open a PR with the fix — like Dependabot, but for APIs.
@@ -19,19 +19,23 @@ Argus watches API vendors (Stripe, Twilio, GitHub...) by diffing their OpenAPI s
 ```
 spec poll ─▶ snapshot store ─▶ semantic diff ─▶ change events
                                               │
-repo clone ─▶ AST usage scan ─▶ impact report ─┤
+repo clone ─▶ AST usage scan ─▶ impact report ┤
                                               ▼
                        LangGraph fix agent ─▶ patch ─▶ branch + PR ─▶ CI verify loop
+                                              ▲
+                                    failure log ─┘ (self-heal, max N attempts)
 ```
 
 | Component | Status | Tech |
 |---|---|---|
-| Spec ingestion + snapshot store | ✅ done | httpx, content-addressed JSON snapshots |
-| Semantic diff engine (breaking-change rules) | ✅ done | normalized OpenAPI comparison |
-| AST usage scanner + impact report | ✅ done | Python `ast`, constant folding, template path matching |
-| LangGraph fix agent | ⏳ next | LangGraph |
-| GitHub PR client + CI feedback loop | pending | PyGithub |
-| CLI + docker-compose + full demo | pending | FastAPI, Docker |
+| Spec ingestion + snapshot store | ✅ | httpx, content-addressed JSON snapshots (SHA-256) |
+| Semantic diff engine (breaking-change rules) | ✅ | normalized OpenAPI comparison |
+| AST usage scanner + impact report | ✅ | Python `ast`, constant folding, template path matching |
+| LangGraph fix agent (validate + retry) | ✅ | LangGraph, OpenAI-compatible LLMs |
+| Multi-provider LLM + quota fallback | ✅ | Gemini / OpenAI / OpenRouter free tier on 429 |
+| GitHub PR client + CI feedback loop | ✅ | httpx (REST API), Actions job logs |
+| CLI + docker-compose | ✅ | argparse, Docker |
+| Full end-to-end demo (PR self-heal) | ✅ | `scripts/demo_pr.py` (verified live) |
 | Multi-vendor registry, workers, Postgres | Phase 2 | Celery + Redis, PostgreSQL |
 | AWS cloud deployment | Phase 3 | ECS Fargate, RDS, Terraform |
 
@@ -42,8 +46,13 @@ app/
 ├── core/          # settings (pydantic-settings, 12-factor config)
 ├── ingestion/     # fetch specs, snapshot versioning
 ├── detection/     # normalize + semantic diff + breaking-change rules
-└── scan/          # AST scanner, impact assessment
-tests/             # pytest suite (34 tests)
+├── scan/          # AST scanner, impact assessment
+├── fix/           # LangGraph fix agent, patch engine, multi-provider LLM
+├── github/        # GitHub client, CI log extraction, PR self-heal loop
+└── cli.py         # argus detect/scan/fix/pr commands
+scripts/
+└── demo_pr.py     # full live pipeline demo (seed repo -> PR -> CI loop)
+tests/             # pytest suite (78 tests)
 ```
 
 ## Setup
@@ -56,33 +65,54 @@ python -m venv .venv
 pip install -e ".[dev]"
 ```
 
-Copy `.env.example` to `.env`:
+Copy `.env.example` to `.env` and fill in at least:
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
+| Variable | Required for | Notes |
+|---|---|---|
+| `GITHUB_TOKEN` | `argus pr`, demo | scopes: `repo`, `workflow` |
+| `GEMINI_API_KEY` / `OPENAI_API_KEY` | `argus fix`, `argus pr` | any OpenAI-compatible provider works via `LLM_BASE_URL` |
+| `OPENROUTER_API_KEY` | fallback when primary LLM is rate-limited | free models e.g. `openai/gpt-oss-20b:free` |
+| `LLM_MODEL` | — | default `gpt-4o-mini` |
+
 ## Usage
 
-Detect breaking changes between the pinned old spec (Jan 2026) and the current GitHub API spec, then find impacted call sites in a repo:
-
 ```powershell
-.\.venv\Scripts\python -c "
-from app.core.config import get_settings
-from app.detection.detect import run_detection
-result = run_detection(get_settings())
-print(result['breaking_count'], 'breaking changes')
-"
+argus detect                 # diff pinned old spec vs. current -> breaking/additive changes
+argus scan [DIR]             # scan a repo for call sites hit by breaking changes
+argus fix [DIR]              # apply LLM fixes in place (add --dry-run to preview diffs)
+argus pr OWNER/REPO          # full loop: detect, scan, fix, open PR, self-heal on CI failure
 ```
 
-Scan a repo for GitHub API usages:
+Example:
 
 ```powershell
-.\.venv\Scripts\python -c "
-from app.scan.scanner import ApiScanner
-for u in ApiScanner('https://api.github.com').scan('path/to/repo'):
-    print(u)
-"
+argus detect
+# 11 breaking, 150 additive changes
+
+argus scan .\my-service
+# Scanned .\my-service: 42 call sites, 3 impacted by breaking changes
+#   app.py:6 affected by [breaking] endpoint_removed
+
+argus fix --dry-run .\my-service   # preview diffs, don't write
+argus fix .\my-service             # write fixes to disk
+
+argus pr acme/website --branch argus/fix --max-attempts 3
+# PR #12: https://github.com/acme/website/pull/12
+# passed=True attempts=3
+```
+
+`argus pr` fetches the repo as a tarball through the GitHub API (no local git checkout needed; use `--dir` to scan a local checkout instead).
+
+## Docker
+
+```powershell
+docker build -t argus:local .
+docker run --rm argus:local detect
+docker compose up             # scans ./repos with argus scan /repos
 ```
 
 ## Test & lint
@@ -97,11 +127,16 @@ for u in ApiScanner('https://api.github.com').scan('path/to/repo'):
 1. **Ingestion** — fetch the vendor's OpenAPI spec with retries/backoff and ETag caching; store each version content-addressed (filename = SHA-256 digest), so history is immutable and deduplicated.
 2. **Detection** — normalize both specs (strip descriptions, sort, keep only semantics), then apply rules: endpoint removed, parameter removed/required/type-changed, response code removed = `breaking`; new endpoints = `additive`.
 3. **Impact** — parse each Python file with `ast`, resolve f-string URLs via constant folding (`BASE = "https://api.github.com"`), match call sites against spec path templates (`/repos/{owner}/{repo}`), and join with breaking changes.
-4. **Fix agent (next)** — a LangGraph agent reads the impact report, edits the code, validates with a syntax check, and opens a PR. CI failures feed back into the agent for self-healing (max 3 retries).
+4. **Fix agent** — a LangGraph agent reads the impact report, proposes a patch, applies it, validates Python syntax, and retries up to `FIX_MAX_ATTEMPTS` times. The LLM is any OpenAI-compatible endpoint (Gemini, OpenAI, OpenRouter) with a free-tier fallback on 429 rate limits.
+5. **PR + CI self-heal** — Argus pushes the fixed files to a branch, opens a PR, and polls the check runs. On failure it extracts the error window from the Actions job log (`##[error]`/`Traceback`), posts it as a PR comment, and re-runs the agent with the error as context — until CI is green or attempts run out.
+
+## Demo
+
+`scripts/demo_pr.py` runs the whole pipeline live: creates a seed repo calling removed GitHub endpoints, detects the breaking changes, scans, fixes, opens a PR, and self-heals from CI feedback (verified: PR went CI-fail -> fail -> green fully autonomously).
 
 ## Roadmap
 
-- **Phase 1 (MVP):** full loop on a real vendor — detection ✅, scanning ✅, fix agent, PR + CI loop, CLI + docker-compose demo
+- **Phase 1 (MVP):** detection ✅, scanning ✅, fix agent ✅, PR + CI self-heal loop ✅, CLI + docker-compose ✅, live demo ✅
 - **Phase 2:** multi-vendor registry, Postgres + Celery workers, GitHub App OAuth, tenant model
 - **Phase 3:** AWS deployment — ECS Fargate, RDS, ElastiCache, S3, Terraform, GitHub Actions CI/CD
 - **Phase 4:** JS/TS scanning, per-vendor agents, real-time webhooks, pgvector changelog search
@@ -111,3 +146,4 @@ for u in ApiScanner('https://api.github.com').scan('path/to/repo'):
 - Scans `requests`/`httpx` style HTTP calls; `requests.request("GET", ...)` style and async clients not yet supported
 - Response-body usage analysis not yet supported
 - Only the GitHub REST API vendor is wired (multi-vendor comes in Phase 2)
+- PRs are opened and left for human review/merge; merge-on-green is not automated
