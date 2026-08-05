@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+import time
 from pathlib import Path
 from typing import TypedDict
 
@@ -9,6 +11,15 @@ from app.core.config import Settings
 from app.fix.models import FixResult, PatchSuggestion
 from app.fix.patch import apply_patch, validate_python
 from app.fix.prompt import build_prompt
+
+RETRY_DELAY_RE = re.compile(r"retry in ([\d.]+)s")
+
+
+def _retry_delay(exc: Exception, attempt: int) -> float:
+    match = RETRY_DELAY_RE.search(str(exc))
+    if match:
+        return min(float(match.group(1)) + 1.0, 60.0)
+    return min(10.0 * (2**attempt), 60.0)
 
 
 class FixState(TypedDict, total=False):
@@ -33,7 +44,15 @@ class SuggestionModel:
         self._llm = ChatOpenAI(**kwargs).with_structured_output(PatchSuggestion)
 
     def suggest(self, prompt: str) -> PatchSuggestion:
-        return self._llm.invoke(prompt)
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                return self._llm.invoke(prompt)
+            except Exception as exc:
+                if "429" not in str(exc) or attempt == max_retries - 1:
+                    raise
+                time.sleep(_retry_delay(exc, attempt))
+        raise RuntimeError("unreachable")
 
 
 def build_suggestion_model(settings: Settings) -> SuggestionModel:

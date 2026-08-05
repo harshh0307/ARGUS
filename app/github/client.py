@@ -30,6 +30,7 @@ class GitHubClient:
                 "User-Agent": "argus/0.1 (api-change-agent)",
             },
             timeout=timeout,
+            follow_redirects=True,
         )
 
     def _request(self, method: str, path: str, **kwargs) -> dict | None:
