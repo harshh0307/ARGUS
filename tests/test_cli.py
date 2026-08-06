@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from app import cli
 from app.detection.models import BREAKING, Change
 from app.fix.models import FixResult, PatchSuggestion
+from app.github.client import GitHubApiError
 from app.github.pr import PRLoopResult
 from app.scan.models import Impact, Usage
 
@@ -195,6 +196,12 @@ class FakeGitHubClient:
     def get_ref(self, owner, repo, branch):
         return None
 
+    def merge_pull_request(self, owner, repo, number, merge_method="squash"):
+        self.calls.append(("merge", owner, repo, number, merge_method))
+
+    def delete_branch(self, owner, repo, branch):
+        self.calls.append(("delete_branch", owner, repo, branch))
+
 
 def test_pr_command_runs_full_loop(monkeypatch, tmp_path, capsys):
     (tmp_path / "app.py").write_text("import requests\nresp = requests.get('/repos/x/tags/protection')\n")
@@ -225,6 +232,7 @@ def test_pr_command_runs_full_loop(monkeypatch, tmp_path, capsys):
         branch="argus/fix",
         max_attempts=None,
         check_timeout=None,
+        merge=False,
     )
     assert cli.cmd_pr(args) == 0
     assert captured["owner"] == "harshh0307"
@@ -234,12 +242,106 @@ def test_pr_command_runs_full_loop(monkeypatch, tmp_path, capsys):
     out = capsys.readouterr().out
     assert "PR #7" in out
     assert "passed=True" in out
+    assert fake_client.calls == []
+
+
+def test_pr_command_merges_when_passed_and_flag_set(monkeypatch, tmp_path, capsys):
+    (tmp_path / "app.py").write_text("import requests\nresp = requests.get('/repos/x/tags/protection')\n")
+    fake_client = FakeGitHubClient()
+
+    def fake_pr_loop(client, owner, repo, **kwargs):
+        return PRLoopResult(7, "https://github.com/x/y/pull/7", passed=True, attempts=1)
+
+    patch_deps(
+        monkeypatch,
+        run_detection=lambda s: {"changes": [change()]},
+        GitHubClient=lambda token: fake_client,
+        ApiScanner=lambda **kw: FakeScanner([usage()]),
+        assess_impact=lambda usages, changes: [impact()],
+        build_suggestion_model=lambda s: object(),
+        run_pr_loop=fake_pr_loop,
+    )
+    args = SimpleNamespace(
+        repo="o/r",
+        dir=str(tmp_path),
+        base=None,
+        branch="argus/fix",
+        max_attempts=None,
+        check_timeout=None,
+        merge=True,
+    )
+    assert cli.cmd_pr(args) == 0
+    assert ("merge", "o", "r", 7, "squash") in fake_client.calls
+    assert ("delete_branch", "o", "r", "argus/fix") in fake_client.calls
+    assert "merged; fix branch deleted" in capsys.readouterr().out
+
+
+def test_pr_command_does_not_merge_when_failed(monkeypatch, tmp_path):
+    (tmp_path / "app.py").write_text("import requests\nresp = requests.get('/repos/x/tags/protection')\n")
+    fake_client = FakeGitHubClient()
+
+    def fake_pr_loop(client, owner, repo, **kwargs):
+        return PRLoopResult(7, "https://github.com/x/y/pull/7", passed=False, attempts=3, failure="boom")
+
+    patch_deps(
+        monkeypatch,
+        run_detection=lambda s: {"changes": [change()]},
+        GitHubClient=lambda token: fake_client,
+        ApiScanner=lambda **kw: FakeScanner([usage()]),
+        assess_impact=lambda usages, changes: [impact()],
+        build_suggestion_model=lambda s: object(),
+        run_pr_loop=fake_pr_loop,
+    )
+    args = SimpleNamespace(
+        repo="o/r",
+        dir=str(tmp_path),
+        base=None,
+        branch="argus/fix",
+        max_attempts=None,
+        check_timeout=None,
+        merge=True,
+    )
+    assert cli.cmd_pr(args) == 1
+    assert fake_client.calls == []
+
+
+def test_pr_command_merge_rejection_warns(monkeypatch, tmp_path, capsys):
+    (tmp_path / "app.py").write_text("import requests\nresp = requests.get('/repos/x/tags/protection')\n")
+    fake_client = FakeGitHubClient()
+    fake_client.merge_pull_request = lambda *a, **k: (_ for _ in ()).throw(
+        GitHubApiError("PUT merge -> 405: protected")
+    )
+
+    def fake_pr_loop(client, owner, repo, **kwargs):
+        return PRLoopResult(7, "https://github.com/x/y/pull/7", passed=True, attempts=1)
+
+    patch_deps(
+        monkeypatch,
+        run_detection=lambda s: {"changes": [change()]},
+        GitHubClient=lambda token: fake_client,
+        ApiScanner=lambda **kw: FakeScanner([usage()]),
+        assess_impact=lambda usages, changes: [impact()],
+        build_suggestion_model=lambda s: object(),
+        run_pr_loop=fake_pr_loop,
+    )
+    args = SimpleNamespace(
+        repo="o/r",
+        dir=str(tmp_path),
+        base=None,
+        branch="argus/fix",
+        max_attempts=None,
+        check_timeout=None,
+        merge=True,
+    )
+    assert cli.cmd_pr(args) == 0
+    assert "merge rejected" in capsys.readouterr().out
 
 
 def test_pr_requires_token(monkeypatch, capsys):
     patch_deps(monkeypatch, get_settings=lambda: settings(github_token=None))
     args = SimpleNamespace(
-        repo="o/r", dir=None, base=None, branch="argus/fix", max_attempts=None, check_timeout=None
+        repo="o/r", dir=None, base=None, branch="argus/fix", max_attempts=None, check_timeout=None,
+        merge=False,
     )
     assert cli.cmd_pr(args) == 2
     assert "GITHUB_TOKEN" in capsys.readouterr().err
@@ -252,7 +354,8 @@ def test_pr_requires_owner_repo_form(monkeypatch, capsys):
         GitHubClient=lambda token: (_ for _ in ()).throw(AssertionError("should not connect")),
     )
     args = SimpleNamespace(
-        repo="nope", dir=None, base=None, branch="argus/fix", max_attempts=None, check_timeout=None
+        repo="nope", dir=None, base=None, branch="argus/fix", max_attempts=None, check_timeout=None,
+        merge=False,
     )
     assert cli.cmd_pr(args) == 2
     assert "OWNER/REPO" in capsys.readouterr().err

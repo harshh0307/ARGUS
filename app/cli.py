@@ -56,6 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--branch", default="argus/fix", help="fix branch to create")
     p.add_argument("--max-attempts", type=int, default=None, help="CI feedback loop attempts")
     p.add_argument("--check-timeout", type=float, default=None, help="seconds to wait per check")
+    p.add_argument("--merge", action="store_true", help="merge the PR when CI passes")
     p.set_defaults(func=cmd_pr)
 
     return parser
@@ -237,6 +238,17 @@ def cmd_pr(args) -> int:
         print(f"passed={result.passed} attempts={result.attempts}")
         if result.failure:
             print(f"last failure: {result.failure[:500]}")
+        if result.passed and args.merge:
+            try:
+                client.merge_pull_request(owner, repo, result.pr_number)
+            except GitHubApiError as exc:
+                print(f"warning: merge rejected, PR left open: {exc}")
+            else:
+                try:
+                    client.delete_branch(owner, repo, args.branch)
+                except GitHubApiError:
+                    pass
+                print("merged; fix branch deleted")
         return 0 if result.passed else 1
 
 

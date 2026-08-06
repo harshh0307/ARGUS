@@ -195,3 +195,43 @@ def test_find_open_pull_returns_none_when_empty():
 
     client = make_client(handler)
     assert client.find_open_pull("o", "r", "argus/fix") is None
+
+
+def test_merge_pull_request_payload():
+    captured = {}
+
+    def handler(request):
+        captured["method"] = request.method
+        captured["json"] = json.loads(request.content)
+        captured["url"] = str(request.url)
+        return httpx.Response(200, json={"merged": True})
+
+    client = make_client(handler)
+    client.merge_pull_request("o", "r", 7)
+    assert captured["method"] == "PUT"
+    assert captured["json"] == {"merge_method": "squash"}
+    assert captured["url"].endswith("/repos/o/r/pulls/7/merge")
+
+
+def test_merge_pull_request_custom_method():
+    captured = {}
+
+    def handler(request):
+        captured["json"] = json.loads(request.content)
+        return httpx.Response(200, json={"merged": True})
+
+    client = make_client(handler)
+    client.merge_pull_request("o", "r", 7, merge_method="rebase")
+    assert captured["json"] == {"merge_method": "rebase"}
+
+
+def test_merge_pull_request_rejected_raises():
+    def handler(request):
+        return httpx.Response(409, json={"message": "Merge conflict"})
+
+    client = make_client(handler)
+    try:
+        client.merge_pull_request("o", "r", 7)
+        assert False, "expected GitHubApiError"
+    except GitHubApiError as exc:
+        assert "409" in str(exc)

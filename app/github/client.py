@@ -222,5 +222,15 @@ class GitHubClient:
     def close_pull(self, owner: str, repo: str, number: int) -> None:
         self._request("PATCH", f"/repos/{owner}/{repo}/pulls/{number}", json={"state": "closed"})
 
+    def merge_pull_request(
+        self, owner: str, repo: str, number: int, merge_method: str = "squash"
+    ) -> dict:
+        data = self._request(
+            "PUT",
+            f"/repos/{owner}/{repo}/pulls/{number}/merge",
+            json={"merge_method": merge_method},
+        )
+        return data or {}
+
     def delete_branch(self, owner: str, repo: str, branch: str) -> None:
         self._request("DELETE", f"/repos/{owner}/{repo}/git/refs/heads/{branch}")
