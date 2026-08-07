@@ -211,3 +211,31 @@ def test_llm_crash_becomes_clean_failure():
     assert fixed is None
     assert "fix agent crashed" in err
     assert "RuntimeError" in err
+
+
+def test_semantic_guard_applies_during_ci_retry_with_previous_error():
+    echo = PatchSuggestion(
+        file="app.py",
+        line=6,
+        action="replace",
+        replacement='    resp = requests.get(f"{BASE}/repos/{owner}/{repo}/tags/protection")',
+    )
+    model = FakeSuggestionModel(echo, echo, echo)
+    content = (
+        "import requests\n\n"
+        'BASE = "https://api.github.com"\n\n'
+        "def protect_tags(owner, repo):\n"
+        '    resp = requests.get(f"{BASE}/repos/{owner}/{repo}/tags/protection")\n'
+        "    return resp.json()\n"
+    )
+    fixed, err = fix_impact_on_content(
+        impact("app.py", line=6),
+        "app.py",
+        content,
+        model,
+        previous_error="CI FAILED: removed endpoints still called",
+        base_url="https://api.github.com",
+    )
+    assert fixed is None
+    assert "still calls removed endpoint" in err
+    assert model.calls == 3

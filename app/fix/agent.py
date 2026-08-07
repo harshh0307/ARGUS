@@ -123,7 +123,7 @@ def build_fix_graph(suggestion_model, max_attempts: int = 3, base_url: str | Non
         return {"patched_content": content, "error": err}
 
     def validate(state: FixState) -> dict:
-        if state.get("error"):
+        if state.get("patched_content") is None:
             return {}
         err = validate_python(state["patched_content"])
         if err is None:

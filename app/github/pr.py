@@ -135,6 +135,7 @@ def run_pr_loop(
         client.pr_comment(
             owner, repo, pr.number, f"argus: CI failed on attempt {attempt}.\n\n{msg}\n\nRetrying fixes..."
         )
+        before = dict(files)
         for impact in impacts:
             path = impact.usage.file
             content = files.get(path)
@@ -149,6 +150,10 @@ def run_pr_loop(
                 client.pr_comment(
                     owner, repo, pr.number, f"argus: fix agent failed on {path} (attempt {attempt}): {err}"
                 )
+        if files == before:
+            msg = "fix agent produced no new patches during retry"
+            client.pr_comment(owner, repo, pr.number, f"argus: giving up after {attempt} attempt(s).\n\n{msg}")
+            return PRLoopResult(pr.number, pr.html_url, passed=False, attempts=attempt, failure=msg)
         push_files(client, owner, repo, branch, files, f"{title} [attempt {attempt + 1}]")
         head_sha = _branch_head(client, owner, repo, branch, head_sha)
 

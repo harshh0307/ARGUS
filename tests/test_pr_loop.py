@@ -118,7 +118,13 @@ def test_ci_fail_then_fix_loop():
             line=2,
             action="replace",
             replacement='resp = requests.get("https://api.github.com/repos/me/x/branches")',
-        )
+        ),
+        PatchSuggestion(
+            file="app.py",
+            line=2,
+            action="replace",
+            replacement='resp = requests.get("https://api.github.com/repos/me/x/collaborators")',
+        ),
     )
     result = run_pr_loop(
         fake,
@@ -133,8 +139,8 @@ def test_ci_fail_then_fix_loop():
     )
     assert result.passed
     assert result.attempts == 2
-    assert "branches" in fake.files["app.py"]["content"]
-    assert "branches" in fake.pushes[0][1]
+    assert "collaborators" in fake.files["app.py"]["content"]
+    assert "collaborators" in fake.pushes[1][1]
     assert len(fake.pushes) == 2
     assert any("CI failed on attempt 1" in c for c in fake.comments)
     assert "NameError" in fake.comments[0]
@@ -152,7 +158,13 @@ def test_gives_up_after_max_attempts():
             line=2,
             action="replace",
             replacement='resp = requests.get("https://api.github.com/repos/me/x/branches")',
-        )
+        ),
+        PatchSuggestion(
+            file="app.py",
+            line=2,
+            action="replace",
+            replacement='resp = requests.get("https://api.github.com/repos/me/x/collaborators")',
+        ),
     )
     result = run_pr_loop(
         fake,
@@ -229,3 +241,30 @@ def test_partial_fix_failure_comments_on_pr():
     )
     assert result.passed
     assert any("initial fix failed on 1 call site" in c for c in fake.comments)
+
+
+class EchoSuggestionModel:
+    def suggest(self, prompt):
+        return PatchSuggestion(file="app.py", line=2, action="replace", replacement='resp = requests.get("x")')
+
+
+def test_retry_with_no_new_patches_gives_up_without_repush():
+    fake = FakeGitHub(check_script=[[check("ci", "failure")]], log="NameError: broken")
+    files = {"app.py": "import requests\nresp = requests.get('x')\n"}
+    result = run_pr_loop(
+        fake,
+        "o",
+        "r",
+        base="main",
+        branch="argus/fix",
+        files=files,
+        impacts=[impact("app.py", 2)],
+        suggestion_model=EchoSuggestionModel(),
+        max_attempts=3,
+        check_interval=0.01,
+    )
+    assert not result.passed
+    assert result.attempts == 1
+    assert "no new patches" in result.failure
+    assert any("giving up" in c for c in fake.comments)
+    assert len(fake.pushes) == 1  # only the initial push; no identical re-push
