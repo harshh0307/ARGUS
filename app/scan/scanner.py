@@ -15,10 +15,12 @@ class ApiScanner:
 
     def scan(self, root: str | Path) -> list[Usage]:
         usages: list[Usage] = []
-        for path in Path(root).rglob("*.py"):
+        root_path = Path(root)
+        for path in root_path.rglob("*.py"):
             if self._ignored(path):
                 continue
-            usages.extend(self.scan_file(path))
+            rel = path.relative_to(root_path).as_posix()
+            usages.extend(self._scan_file(path, rel))
         return sorted(usages, key=lambda u: (u.file, u.line, u.method, u.path))
 
     def scan_source(self, source: str, filename: str = "<string>") -> list[Usage]:
@@ -32,11 +34,14 @@ class ApiScanner:
         return visitor.usages
 
     def scan_file(self, path: Path) -> list[Usage]:
+        return self._scan_file(path, path)
+
+    def _scan_file(self, path: Path, filename: Path) -> list[Usage]:
         try:
             source = path.read_text(encoding="utf-8-sig")
         except (OSError, UnicodeDecodeError):
             return []
-        return self.scan_source(source, str(path))
+        return self.scan_source(source, str(filename))
 
     def _ignored(self, path: Path) -> bool:
         return any(part in self.ignore_dirs for part in path.parts)

@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from app.scan.scanner import ApiScanner
 
 BASE = "https://api.github.com"
@@ -78,3 +80,11 @@ def test_utf8_bom_is_handled(tmp_path):
     usages = ApiScanner(BASE).scan(tmp_path)
     assert len(usages) == 1
     assert usages[0].path == "/repos/me"
+
+
+def test_scan_returns_relative_file_paths(tmp_path):
+    write(tmp_path, "pkg/app.py", 'requests.get("https://api.github.com/repos/me")\n')
+    usages = ApiScanner(BASE).scan(tmp_path)
+    assert len(usages) == 1
+    assert usages[0].file == "pkg/app.py"
+    assert not Path(usages[0].file).is_absolute()
