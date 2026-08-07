@@ -128,10 +128,11 @@ def test_fix_applies_in_directory(monkeypatch, tmp_path):
     target.write_text("old")
     captured = {}
 
-    def fake_run_fix(impacts, model, max_attempts):
+    def fake_run_fix(impacts, model, max_attempts, base_url=None):
         captured["impacts"] = impacts
         captured["model"] = model
         captured["max_attempts"] = max_attempts
+        captured["base_url"] = base_url
         return [FixResult("app.py", 6, True, PatchSuggestion(file="app.py", line=6, replacement="new"))]
 
     patch_deps(

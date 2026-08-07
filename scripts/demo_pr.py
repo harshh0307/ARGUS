@@ -59,11 +59,31 @@ jobs:
         run: |
           pip install requests
           python - <<'PY'
+          import requests
           from app import protect_tags, dependabot_access, get_repo
 
-          protect_tags("harshh0307", "argus-demo-repo")
-          dependabot_access("harshh0307")
-          get_repo("harshh0307", "argus-demo-repo")
+          def assert_removed_endpoints_not_called():
+              real_get = requests.get
+              calls = []
+
+              def spy(url, *args, **kwargs):
+                  calls.append(url)
+                  return real_get(url, *args, **kwargs)
+
+              requests.get = spy
+              try:
+                  protect_tags("harshh0307", "argus-demo-repo")
+                  dependabot_access("harshh0307")
+                  get_repo("harshh0307", "argus-demo-repo")
+              finally:
+                  requests.get = real_get
+              removed = [
+                  u for u in calls
+                  if "tags/protection" in u or "dependabot/repository-access" in u
+              ]
+              assert not removed, f"removed endpoints still called: {removed}"
+
+          assert_removed_endpoints_not_called()
           print("API usage OK")
           PY
 """

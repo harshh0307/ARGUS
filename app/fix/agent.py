@@ -11,6 +11,8 @@ from app.core.config import Settings
 from app.fix.models import FixResult, PatchSuggestion
 from app.fix.patch import apply_patch, validate_python
 from app.fix.prompt import build_prompt
+from app.scan.impact import match_path
+from app.scan.scanner import ApiScanner
 
 RETRY_DELAY_RE = re.compile(r"retry in ([\d.]+)s")
 
@@ -44,31 +46,54 @@ class SuggestionModel:
     ):
         if not api_key:
             raise ValueError("an API key is required to build a SuggestionModel")
-        from langchain_openai import ChatOpenAI
-
-        kwargs = {"model": model_name, "api_key": api_key, "temperature": 0}
-        if base_url:
-            kwargs["base_url"] = base_url
-        self._llm = ChatOpenAI(**kwargs).with_structured_output(PatchSuggestion)
+        self._api_key = api_key
+        self._model_name = model_name
+        self._base_url = base_url
+        self._fallback_api_key = fallback_api_key
+        self._fallback_model = fallback_model
+        self._fallback_base_url = fallback_base_url
+        self._llm = None
         self._fallback = None
-        if fallback_api_key:
-            fkwargs = {"model": fallback_model, "api_key": fallback_api_key, "temperature": 0}
-            if fallback_base_url:
-                fkwargs["base_url"] = fallback_base_url
+
+    def _get_llm(self):
+        if self._llm is None:
+            from langchain_openai import ChatOpenAI
+            kwargs = {"model": self._model_name, "api_key": self._api_key, "temperature": 0}
+            if self._base_url:
+                kwargs["base_url"] = self._base_url
+            self._llm = ChatOpenAI(**kwargs).with_structured_output(PatchSuggestion)
+        return self._llm
+
+    def _get_fallback(self):
+        if self._fallback is None and self._fallback_api_key:
+            from langchain_openai import ChatOpenAI
+            fkwargs = {"model": self._fallback_model, "api_key": self._fallback_api_key, "temperature": 0}
+            if self._fallback_base_url:
+                fkwargs["base_url"] = self._fallback_base_url
             self._fallback = ChatOpenAI(**fkwargs).with_structured_output(PatchSuggestion)
+        return self._fallback
 
     def suggest(self, prompt: str) -> PatchSuggestion:
         max_retries = 3
+        last_exc: Exception | None = None
         for attempt in range(max_retries):
             try:
-                return self._llm.invoke(prompt)
-            except Exception as exc:
-                if "429" not in str(exc) or attempt == max_retries - 1:
-                    if self._fallback is not None:
-                        return self._fallback.invoke(prompt)
-                    raise
+                return self._get_llm().invoke(prompt)
+            except Exception as exc:  # noqa: BLE001 - provider errors are unpredictable
+                last_exc = exc
+                if "429" not in str(exc):
+                    break
                 time.sleep(_retry_delay(exc, attempt))
-        raise RuntimeError("unreachable")
+        fallback = self._get_fallback()
+        if fallback is None:
+            raise last_exc or RuntimeError("primary LLM failed")
+        for attempt in range(max_retries):
+            try:
+                return fallback.invoke(prompt)
+            except Exception as exc:  # noqa: BLE001 - provider errors are unpredictable
+                last_exc = exc
+                time.sleep(_retry_delay(exc, attempt))
+        raise last_exc or RuntimeError("fallback LLM failed")
 
 
 def build_suggestion_model(settings: Settings) -> SuggestionModel:
@@ -78,12 +103,12 @@ def build_suggestion_model(settings: Settings) -> SuggestionModel:
         model_name=settings.llm_model,
         base_url=settings.llm_base_url,
         fallback_api_key=settings.openrouter_api_key,
-        fallback_model=settings.openrouter_model or "openai/gpt-oss-20b:free",
+        fallback_model=settings.openrouter_model or "nvidia/nemotron-3-ultra-550b-a55b:free",
         fallback_base_url="https://openrouter.ai/api/v1",
     )
 
 
-def build_fix_graph(suggestion_model, max_attempts: int = 3):
+def build_fix_graph(suggestion_model, max_attempts: int = 3, base_url: str | None = None):
     def generate(state: FixState) -> dict:
         impact = state["impact"]
         context = numbered_context(state["file_content"], impact["line"])
@@ -100,7 +125,10 @@ def build_fix_graph(suggestion_model, max_attempts: int = 3):
     def validate(state: FixState) -> dict:
         if state.get("error"):
             return {}
-        return {"error": validate_python(state["patched_content"])}
+        err = validate_python(state["patched_content"])
+        if err is None:
+            err = _still_calls_error(state["patched_content"], state["impact"], base_url)
+        return {"error": err}
 
     def route(state: FixState) -> str:
         if state.get("error") is None:
@@ -135,8 +163,39 @@ def impact_to_dict(impact) -> dict:
         "path": impact.usage.path,
         "change_kind": impact.change.kind,
         "change_severity": impact.change.severity,
+        "change_path": impact.change.path,
         "change_detail": impact.change.detail,
     }
+
+
+def _still_calls_error(content: str, impact: dict, base_url: str | None) -> str | None:
+    if base_url is None or impact.get("change_kind") != "endpoint_removed":
+        return None
+    usages = ApiScanner(base_url=base_url).scan_source(content, filename="patched")
+    for usage in usages:
+        if usage.method == impact["method"] and match_path(usage.path, impact["change_path"]):
+            return (
+                f"patch still calls removed endpoint "
+                f"{usage.method.upper()} {impact['change_path']}"
+            )
+    return None
+
+
+def _invoke_graph(graph, state: dict) -> dict:
+    try:
+        return graph.invoke(state)
+    except Exception as exc:  # noqa: BLE001 - any LLM/graph failure must degrade cleanly
+        return {"error": f"fix agent crashed: {type(exc).__name__}: {str(exc)[:500]}", "patched_content": None}
+
+
+def _get_or_build_graph(suggestion_model, max_attempts: int, base_url: str | None, cache: dict):
+    key = (id(suggestion_model), max_attempts, base_url)
+    if key not in cache:
+        cache[key] = build_fix_graph(suggestion_model, max_attempts, base_url)
+    return cache[key]
+
+
+_GRAPH_CACHE: dict[tuple, object] = {}
 
 
 def fix_impact_on_content(
@@ -146,37 +205,40 @@ def fix_impact_on_content(
     suggestion_model,
     previous_error: str | None = None,
     max_attempts: int = 3,
+    base_url: str | None = None,
 ) -> tuple[str | None, str | None]:
-    graph = build_fix_graph(suggestion_model, max_attempts)
-    final = graph.invoke(
+    graph = _get_or_build_graph(suggestion_model, max_attempts, base_url, _GRAPH_CACHE)
+    final = _invoke_graph(
+        graph,
         {
             "impact": impact_to_dict(impact),
             "file_path": file_path,
             "file_content": content,
             "error": previous_error,
             "attempts": 0,
-        }
+        },
     )
     success = final.get("error") is None and final.get("patched_content") is not None
     return (final.get("patched_content"), None) if success else (None, final.get("error"))
 
 
-def run_fix(impacts, suggestion_model, max_attempts: int = 3) -> list[FixResult]:
-    graph = build_fix_graph(suggestion_model, max_attempts)
+def run_fix(impacts, suggestion_model, max_attempts: int = 3, base_url: str | None = None) -> list[FixResult]:
+    graph = _get_or_build_graph(suggestion_model, max_attempts, base_url, _GRAPH_CACHE)
     contents: dict[str, str] = {}
     results: list[FixResult] = []
     for impact in impacts:
         path = Path(impact.usage.file)
         if path not in contents:
             contents[path] = path.read_text(encoding="utf-8-sig")
-        final = graph.invoke(
+        final = _invoke_graph(
+            graph,
             {
                 "impact": impact_to_dict(impact),
                 "file_path": impact.usage.file,
                 "file_content": contents[path],
                 "error": None,
                 "attempts": 0,
-            }
+            },
         )
         success = final.get("error") is None and final.get("patched_content") is not None
         results.append(

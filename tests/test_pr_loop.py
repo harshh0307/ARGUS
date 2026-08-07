@@ -79,6 +79,14 @@ class FakeGitHub:
 def test_happy_path_opens_pr_and_passes():
     fake = FakeGitHub(check_script=[[check("ci", "success")]])
     files = {"app.py": "import requests\nresp = requests.get('x')\n"}
+    model = FakeSuggestionModel(
+        PatchSuggestion(
+            file="app.py",
+            line=2,
+            action="replace",
+            replacement='resp = requests.get("https://api.github.com/repos/me/x/branches")',
+        )
+    )
     result = run_pr_loop(
         fake,
         "o",
@@ -87,7 +95,7 @@ def test_happy_path_opens_pr_and_passes():
         branch="argus/fix",
         files=files,
         impacts=[impact("app.py", 2)],
-        suggestion_model=FakeSuggestionModel(),
+        suggestion_model=model,
         check_interval=0.01,
     )
     assert result.passed
@@ -168,3 +176,56 @@ def test_build_pr_body():
     assert "Argus fixed 2 breaking changes." in body
     assert "- GET /x removed" in body
     assert "- POST /y changed" in body
+
+
+class FailingSuggestionModel:
+    def suggest(self, prompt):
+        return PatchSuggestion(file="app.py", line=2, action="replace", replacement="")  # invalid
+
+
+def test_all_fixes_failed_aborts_without_pr():
+    fake = FakeGitHub(check_script=[[check("ci", "success")]])
+    files = {"app.py": "import requests\nresp = requests.get('x')\n"}
+    result = run_pr_loop(
+        fake,
+        "o",
+        "r",
+        base="main",
+        branch="argus/fix",
+        files=files,
+        impacts=[impact("app.py", 2)],
+        suggestion_model=FailingSuggestionModel(),
+        check_interval=0.01,
+    )
+    assert not result.passed
+    assert result.attempts == 0
+    assert result.pr_number == 0
+    assert "failed to produce any patch" in result.failure
+    assert fake.pushes == []
+    assert fake.comments == []
+
+
+def test_partial_fix_failure_comments_on_pr():
+    fake = FakeGitHub(check_script=[[check("ci", "success")]])
+    files = {"app.py": "import requests\nresp = requests.get('x')\n"}
+    model = FakeSuggestionModel(
+        PatchSuggestion(
+            file="app.py",
+            line=2,
+            action="replace",
+            replacement='resp = requests.get("https://api.github.com/repos/me/x/branches")',
+        )
+    )
+    result = run_pr_loop(
+        fake,
+        "o",
+        "r",
+        base="main",
+        branch="argus/fix",
+        files=files,
+        impacts=[impact("app.py", 2), impact("app.py", 9)],
+        suggestion_model=model,
+        check_interval=0.01,
+    )
+    assert result.passed
+    assert any("initial fix failed on 1 call site" in c for c in fake.comments)

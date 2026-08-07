@@ -24,7 +24,6 @@ from app.detection.models import ADDITIVE, BREAKING
 from app.fix.agent import build_suggestion_model, fix_impact_on_content, run_fix
 from app.github.client import GitHubApiError, GitHubClient
 from app.github.pr import PRLoopResult, build_pr_body, run_pr_loop
-from app.ingestion.fetcher import SpecFetchError
 from app.scan.impact import assess_impact
 from app.scan.scanner import ApiScanner
 
@@ -124,7 +123,12 @@ def cmd_fix(args) -> int:
             if path not in contents:
                 contents[path] = path.read_text(encoding="utf-8-sig")
             patched, err = fix_impact_on_content(
-                impact, impact.usage.file, contents[path], model, max_attempts=max_attempts
+                impact,
+                impact.usage.file,
+                contents[path],
+                model,
+                max_attempts=max_attempts,
+                base_url=settings.api_base_url,
             )
             if patched is None:
                 print(f"  {impact.usage.file}:{impact.usage.line} FAILED: {err}")
@@ -137,7 +141,7 @@ def cmd_fix(args) -> int:
         return 0
 
     with chdir(root):
-        results = run_fix(impacts, model, max_attempts)
+        results = run_fix(impacts, model, max_attempts, base_url=settings.api_base_url)
     fixed = sum(1 for r in results if r.success)
     for result in results:
         if result.success:
@@ -232,6 +236,7 @@ def cmd_pr(args) -> int:
             max_attempts=args.max_attempts or settings.fix_max_attempts,
             check_timeout=args.check_timeout or 600.0,
             check_interval=15.0,
+            base_url=settings.api_base_url,
             body=body,
         )
         print(f"PR #{result.pr_number}: {result.pr_url}")
@@ -256,12 +261,12 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except (SpecFetchError, GitHubApiError, OSError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 1
     except KeyboardInterrupt:
         print("interrupted", file=sys.stderr)
         return 130
+    except Exception as exc:  # noqa: BLE001 - catch-all for unexpected failures
+        print(f"error: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

@@ -21,16 +21,22 @@ class ApiScanner:
             usages.extend(self.scan_file(path))
         return sorted(usages, key=lambda u: (u.file, u.line, u.method, u.path))
 
+    def scan_source(self, source: str, filename: str = "<string>") -> list[Usage]:
+        try:
+            tree = ast.parse(source, filename=filename)
+        except SyntaxError:
+            return []
+        constants = self._module_constants(tree)
+        visitor = _CallVisitor(filename, self.base_url, constants)
+        visitor.visit(tree)
+        return visitor.usages
+
     def scan_file(self, path: Path) -> list[Usage]:
         try:
             source = path.read_text(encoding="utf-8-sig")
-            tree = ast.parse(source, filename=str(path))
-        except (OSError, UnicodeDecodeError, SyntaxError):
+        except (OSError, UnicodeDecodeError):
             return []
-        constants = self._module_constants(tree)
-        visitor = _CallVisitor(str(path), self.base_url, constants)
-        visitor.visit(tree)
-        return visitor.usages
+        return self.scan_source(source, str(path))
 
     def _ignored(self, path: Path) -> bool:
         return any(part in self.ignore_dirs for part in path.parts)
