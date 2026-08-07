@@ -22,8 +22,10 @@ spec poll ─▶ snapshot store ─▶ semantic diff ─▶ change events
 repo clone ─▶ AST usage scan ─▶ impact report ┤
                                               ▼
                        LangGraph fix agent ─▶ patch ─▶ branch + PR ─▶ CI verify loop
-                                              ▲
-                                    failure log ─┘ (self-heal, max N attempts)
+                          │  semantic guard ─┘                         ▲
+                          └── syntax + AST re-scan rejects no-ops      │
+                                              ▲                failure log ─┘
+                                              └──────── (self-heal, max N attempts)
 ```
 
 | Component | Status | Tech |
@@ -32,7 +34,9 @@ repo clone ─▶ AST usage scan ─▶ impact report ┤
 | Semantic diff engine (breaking-change rules) | ✅ | normalized OpenAPI comparison |
 | AST usage scanner + impact report | ✅ | Python `ast`, constant folding, template path matching |
 | LangGraph fix agent (validate + retry) | ✅ | LangGraph, OpenAI-compatible LLMs |
-| Multi-provider LLM + quota fallback | ✅ | Gemini / OpenAI / OpenRouter free tier on 429 |
+| Semantic guard (no-op patch rejection) | ✅ | re-scans patched AST, rejects if removed endpoint still called |
+| Multi-provider LLM + quota fallback | ✅ | Gemini / OpenAI primary, Nemotron free fallback on 429 |
+| Merge-on-green (`--merge` flag) | ✅ | squash-merge when CI passes, branch cleanup |
 | GitHub PR client + CI feedback loop | ✅ | httpx (REST API), Actions job logs |
 | CLI + docker-compose | ✅ | argparse, Docker |
 | Full end-to-end demo (PR self-heal) | ✅ | `scripts/demo_pr.py` (verified live) |
@@ -52,7 +56,7 @@ app/
 └── cli.py         # argus detect/scan/fix/pr commands
 scripts/
 └── demo_pr.py     # full live pipeline demo (seed repo -> PR -> CI loop)
-tests/             # pytest suite (78 tests)
+tests/             # pytest suite (90 tests)
 ```
 
 ## Setup
@@ -75,7 +79,8 @@ Copy-Item .env.example .env
 |---|---|---|
 | `GITHUB_TOKEN` | `argus pr`, demo | scopes: `repo`, `workflow` |
 | `GEMINI_API_KEY` / `OPENAI_API_KEY` | `argus fix`, `argus pr` | any OpenAI-compatible provider works via `LLM_BASE_URL` |
-| `OPENROUTER_API_KEY` | fallback when primary LLM is rate-limited | free models e.g. `openai/gpt-oss-20b:free` |
+| `OPENROUTER_API_KEY` | fallback when primary LLM is rate-limited | free model: `nvidia/nemotron-3-ultra-550b-a55b:free` (verified) |
+| `OPENROUTER_MODEL` | — | default `nvidia/nemotron-3-ultra-550b-a55b:free` |
 | `LLM_MODEL` | — | default `gpt-4o-mini` |
 
 ## Usage
@@ -85,6 +90,7 @@ argus detect                 # diff pinned old spec vs. current -> breaking/addi
 argus scan [DIR]             # scan a repo for call sites hit by breaking changes
 argus fix [DIR]              # apply LLM fixes in place (add --dry-run to preview diffs)
 argus pr OWNER/REPO          # full loop: detect, scan, fix, open PR, self-heal on CI failure
+argus pr OWNER/REPO --merge  # same, but squash-merge when CI passes
 ```
 
 Example:
@@ -103,6 +109,9 @@ argus fix .\my-service             # write fixes to disk
 argus pr acme/website --branch argus/fix --max-attempts 3
 # PR #12: https://github.com/acme/website/pull/12
 # passed=True attempts=3
+
+argus pr acme/website --merge      # squash-merge when CI passes
+# merged; fix branch deleted
 ```
 
 `argus pr` fetches the repo as a tarball through the GitHub API (no local git checkout needed; use `--dir` to scan a local checkout instead).
@@ -128,7 +137,9 @@ docker compose up             # scans ./repos with argus scan /repos
 2. **Detection** — normalize both specs (strip descriptions, sort, keep only semantics), then apply rules: endpoint removed, parameter removed/required/type-changed, response code removed = `breaking`; new endpoints = `additive`.
 3. **Impact** — parse each Python file with `ast`, resolve f-string URLs via constant folding (`BASE = "https://api.github.com"`), match call sites against spec path templates (`/repos/{owner}/{repo}`), and join with breaking changes.
 4. **Fix agent** — a LangGraph agent reads the impact report, proposes a patch, applies it, validates Python syntax, and retries up to `FIX_MAX_ATTEMPTS` times. The LLM is any OpenAI-compatible endpoint (Gemini, OpenAI, OpenRouter) with a free-tier fallback on 429 rate limits.
-5. **PR + CI self-heal** — Argus pushes the fixed files to a branch, opens a PR, and polls the check runs. On failure it extracts the error window from the Actions job log (`##[error]`/`Traceback`), posts it as a PR comment, and re-runs the agent with the error as context — until CI is green or attempts run out.
+5. **Semantic guard** — after syntax validation, the agent re-scans the patched content with the AST scanner. If the removed endpoint is still called, the patch is rejected and the agent retries with the error as context. This prevents no-op patches (LLM echoing the original line) from being pushed.
+6. **PR + CI self-heal** — Argus pushes the fixed files to a branch, opens a PR, and polls the check runs. On failure it extracts the error window from the Actions job log (`##[error]`/`Traceback`), posts it as a PR comment, and re-runs the agent with the error as context — until CI is green or attempts run out.
+7. **Merge-on-green** — with `--merge`, Argus squash-merges the PR when CI passes and deletes the fix branch. If merge is rejected (e.g., branch protection), it warns and leaves the PR open.
 
 ## Demo
 
@@ -136,7 +147,7 @@ docker compose up             # scans ./repos with argus scan /repos
 
 ## Roadmap
 
-- **Phase 1 (MVP):** detection ✅, scanning ✅, fix agent ✅, PR + CI self-heal loop ✅, CLI + docker-compose ✅, live demo ✅
+- **Phase 1 (MVP):** detection ✅, scanning ✅, fix agent ✅, semantic guard ✅, PR + CI self-heal ✅, merge-on-green ✅, CLI + docker-compose ✅, live demo ✅
 - **Phase 2:** multi-vendor registry, Postgres + Celery workers, GitHub App OAuth, tenant model
 - **Phase 3:** AWS deployment — ECS Fargate, RDS, ElastiCache, S3, Terraform, GitHub Actions CI/CD
 - **Phase 4:** JS/TS scanning, per-vendor agents, real-time webhooks, pgvector changelog search
@@ -146,4 +157,4 @@ docker compose up             # scans ./repos with argus scan /repos
 - Scans `requests`/`httpx` style HTTP calls; `requests.request("GET", ...)` style and async clients not yet supported
 - Response-body usage analysis not yet supported
 - Only the GitHub REST API vendor is wired (multi-vendor comes in Phase 2)
-- PRs are opened and left for human review/merge; merge-on-green is not automated
+- Free-tier LLMs may produce no-op patches; the semantic guard catches these but adds latency (paid models fix this entirely)
