@@ -56,7 +56,7 @@ app/
 └── cli.py         # argus detect/scan/fix/pr commands
 scripts/
 └── demo_pr.py     # full live pipeline demo (seed repo -> PR -> CI loop)
-tests/             # pytest suite (90 tests)
+tests/             # pytest suite (93 tests)
 ```
 
 ## Setup
@@ -143,7 +143,7 @@ docker compose up             # scans ./repos with argus scan /repos
 
 ## Demo
 
-`scripts/demo_pr.py` runs the whole pipeline live: creates a seed repo calling removed GitHub endpoints, detects the breaking changes, scans, fixes, opens a PR, and self-heals from CI feedback (verified: PR went CI-fail -> fail -> green fully autonomously).
+`scripts/demo_pr.py` runs the whole pipeline live: creates a seed repo calling removed GitHub endpoints, detects the breaking changes, scans, fixes, opens a PR, and self-heals from CI feedback (verified live: CI failures are fed back to the fix agent, semantic guard rejects no-op patches, and retries push real fixes).
 
 ## Roadmap
 
