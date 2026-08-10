@@ -6,3 +6,17 @@ services:
     volumes:
       - ./repos:/repos:ro
     command: ["scan", "/repos"]
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: argus
+      POSTGRES_PASSWORD: argus
+      POSTGRES_DB: argus
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:

@@ -31,6 +31,8 @@ repo clone ─▶ AST usage scan ─▶ impact report ┤
 | Component | Status | Tech |
 |---|---|---|
 | Spec ingestion + snapshot store | ✅ | httpx, content-addressed JSON snapshots (SHA-256) |
+| Vendor registry (multi-vendor) | ✅ | github + stripe + twilio built-ins, `argus vendors` |
+| Postgres/SQLite persistence | ✅ | SQLAlchemy 2.0, psycopg; vendors, snapshots, detection runs |
 | Semantic diff engine (breaking-change rules) | ✅ | normalized OpenAPI comparison |
 | AST usage scanner + impact report | ✅ | Python `ast`, constant folding, template path matching |
 | LangGraph fix agent (validate + retry) | ✅ | LangGraph, OpenAI-compatible LLMs |
@@ -82,12 +84,15 @@ Copy-Item .env.example .env
 | `OPENROUTER_API_KEY` | fallback when primary LLM is rate-limited | free model: `nvidia/nemotron-3-ultra-550b-a55b:free` (verified) |
 | `OPENROUTER_MODEL` | — | default `nvidia/nemotron-3-ultra-550b-a55b:free` |
 | `LLM_MODEL` | — | default `gpt-4o-mini` |
+| `DATABASE_URL` | `argus detect` persistence | optional; `sqlite:///data/argus.db` or `postgresql+psycopg://...` (docker-compose has Postgres 16) |
 
 ## Usage
 
 ```powershell
-argus detect                 # diff pinned old spec vs. current -> breaking/additive changes
-argus scan [DIR]             # scan a repo for call sites hit by breaking changes
+argus vendors               # list registered spec vendors (github, stripe, twilio)
+argus detect                # diff pinned old spec vs. current -> breaking/additive changes
+argus detect --vendor stripe  # run detection for another vendor
+argus scan [DIR]            # scan a repo for call sites hit by breaking changes
 argus fix [DIR]              # apply LLM fixes in place (add --dry-run to preview diffs)
 argus pr OWNER/REPO          # full loop: detect, scan, fix, open PR, self-heal on CI failure
 argus pr OWNER/REPO --merge  # same, but squash-merge when CI passes
@@ -148,7 +153,7 @@ docker compose up             # scans ./repos with argus scan /repos
 ## Roadmap
 
 - **Phase 1 (MVP):** detection ✅, scanning ✅, fix agent ✅, semantic guard ✅, PR + CI self-heal ✅, merge-on-green ✅, CLI + docker-compose ✅, live demo ✅
-- **Phase 2:** multi-vendor registry, Postgres + Celery workers, GitHub App OAuth, tenant model
+- **Phase 2 (in progress):** vendor registry ✅, Postgres persistence ✅, pipeline service layer 🔄, Celery workers + Redis ⬜, GitHub App OAuth + webhooks ⬜
 - **Phase 3:** AWS deployment — ECS Fargate, RDS, ElastiCache, S3, Terraform, GitHub Actions CI/CD
 - **Phase 4:** JS/TS scanning, per-vendor agents, real-time webhooks, pgvector changelog search
 

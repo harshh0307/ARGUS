@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     snapshot_dir: str = "data/snapshots"
     api_base_url: str = "https://api.github.com"
     github_token: str | None = None
+    database_url: str | None = None
     http_timeout_seconds: float = 30.0
     http_max_retries: int = 3
     http_backoff_base_seconds: float = 1.0

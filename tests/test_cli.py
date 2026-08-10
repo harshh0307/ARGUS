@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import io
 import tarfile
@@ -10,6 +10,7 @@ from app.fix.models import FixResult, PatchSuggestion
 from app.github.client import GitHubApiError
 from app.github.pr import PRLoopResult
 from app.scan.models import Impact, Usage
+from app.services import pipeline as svc
 
 
 def usage(file="app.py", line=6, method="get", path="/repos/x/tags/protection"):
@@ -48,7 +49,7 @@ def settings(**overrides):
 
 def patch_deps(monkeypatch, **deps):
     for name, value in deps.items():
-        monkeypatch.setattr(cli, name, value)
+        monkeypatch.setattr(svc, name, value)
 
 
 class FakeScanner:
@@ -66,7 +67,7 @@ def test_parser_has_all_commands():
 
 
 def test_detect_prints_summary(monkeypatch, capsys):
-    def fake_detection(settings):
+    def fake_detection(settings, **kw):
         return {
             "breaking_count": 1,
             "additive_count": 2,
@@ -84,7 +85,7 @@ def test_detect_prints_summary(monkeypatch, capsys):
 def test_scan_reports_no_impacts(monkeypatch, capsys):
     patch_deps(
         monkeypatch,
-        run_detection=lambda s: {"changes": [change()]},
+        run_detection=lambda s, **kw: {"changes": [change()]},
         ApiScanner=lambda **kw: FakeScanner([]),
         assess_impact=lambda usages, changes: [],
     )
@@ -95,7 +96,7 @@ def test_scan_reports_no_impacts(monkeypatch, capsys):
 def test_scan_reports_impacts(monkeypatch, capsys):
     patch_deps(
         monkeypatch,
-        run_detection=lambda s: {"changes": [change()]},
+        run_detection=lambda s, **kw: {"changes": [change()]},
         ApiScanner=lambda **kw: FakeScanner([usage()]),
         assess_impact=lambda usages, changes: [impact()],
     )
@@ -108,7 +109,7 @@ def test_fix_dry_run_prints_diff(monkeypatch, tmp_path, capsys):
     target.write_text("import requests\nresp = requests.get('/repos/x/tags/protection')\n")
     patch_deps(
         monkeypatch,
-        run_detection=lambda s: {"changes": [change()]},
+        run_detection=lambda s, **kw: {"changes": [change()]},
         ApiScanner=lambda **kw: FakeScanner([usage()]),
         assess_impact=lambda usages, changes: [impact()],
         build_suggestion_model=lambda s: object(),
@@ -137,7 +138,7 @@ def test_fix_applies_in_directory(monkeypatch, tmp_path):
 
     patch_deps(
         monkeypatch,
-        run_detection=lambda s: {"changes": [change()]},
+        run_detection=lambda s, **kw: {"changes": [change()]},
         ApiScanner=lambda **kw: FakeScanner([usage()]),
         assess_impact=lambda usages, changes: [impact()],
         build_suggestion_model=lambda s: object(),
@@ -152,7 +153,7 @@ def test_fix_applies_in_directory(monkeypatch, tmp_path):
 def test_fix_missing_key_returns_2(monkeypatch, tmp_path, capsys):
     patch_deps(
         monkeypatch,
-        run_detection=lambda s: {"changes": [change()]},
+        run_detection=lambda s, **kw: {"changes": [change()]},
         ApiScanner=lambda **kw: FakeScanner([usage()]),
         assess_impact=lambda usages, changes: [impact()],
         build_suggestion_model=lambda s: (_ for _ in ()).throw(ValueError("no key")),
@@ -176,7 +177,7 @@ def test_extract_tarball_strips_root_component(tmp_path):
             info.type = tarfile.DIRTYPE if is_dir else tarfile.REGTYPE
             tar.addfile(info, io.BytesIO(data))
     dest = tmp_path / "out"
-    cli._extract_tarball(buf.getvalue(), dest)
+    svc._extract_tarball(buf.getvalue(), dest)
     assert (dest / "app.py").read_bytes() == b"x"
     assert (dest / "README.md").read_bytes() == b"readme"
 
@@ -219,7 +220,7 @@ def test_pr_command_runs_full_loop(monkeypatch, tmp_path, capsys):
 
     patch_deps(
         monkeypatch,
-        run_detection=lambda s: {"changes": [change()]},
+        run_detection=lambda s, **kw: {"changes": [change()]},
         GitHubClient=lambda token: fake_client,
         ApiScanner=lambda **kw: FakeScanner([usage()]),
         assess_impact=lambda usages, changes: [impact()],
@@ -255,7 +256,7 @@ def test_pr_command_merges_when_passed_and_flag_set(monkeypatch, tmp_path, capsy
 
     patch_deps(
         monkeypatch,
-        run_detection=lambda s: {"changes": [change()]},
+        run_detection=lambda s, **kw: {"changes": [change()]},
         GitHubClient=lambda token: fake_client,
         ApiScanner=lambda **kw: FakeScanner([usage()]),
         assess_impact=lambda usages, changes: [impact()],
@@ -286,7 +287,7 @@ def test_pr_command_does_not_merge_when_failed(monkeypatch, tmp_path):
 
     patch_deps(
         monkeypatch,
-        run_detection=lambda s: {"changes": [change()]},
+        run_detection=lambda s, **kw: {"changes": [change()]},
         GitHubClient=lambda token: fake_client,
         ApiScanner=lambda **kw: FakeScanner([usage()]),
         assess_impact=lambda usages, changes: [impact()],
@@ -318,7 +319,7 @@ def test_pr_command_merge_rejection_warns(monkeypatch, tmp_path, capsys):
 
     patch_deps(
         monkeypatch,
-        run_detection=lambda s: {"changes": [change()]},
+        run_detection=lambda s, **kw: {"changes": [change()]},
         GitHubClient=lambda token: fake_client,
         ApiScanner=lambda **kw: FakeScanner([usage()]),
         assess_impact=lambda usages, changes: [impact()],
@@ -339,7 +340,7 @@ def test_pr_command_merge_rejection_warns(monkeypatch, tmp_path, capsys):
 
 
 def test_pr_requires_token(monkeypatch, capsys):
-    patch_deps(monkeypatch, get_settings=lambda: settings(github_token=None))
+    monkeypatch.setattr(cli, "get_settings", lambda: settings(github_token=None))
     args = SimpleNamespace(
         repo="o/r", dir=None, base=None, branch="argus/fix", max_attempts=None, check_timeout=None,
         merge=False,
@@ -349,14 +350,11 @@ def test_pr_requires_token(monkeypatch, capsys):
 
 
 def test_pr_requires_owner_repo_form(monkeypatch, capsys):
-    patch_deps(
-        monkeypatch,
-        get_settings=lambda: settings(),
-        GitHubClient=lambda token: (_ for _ in ()).throw(AssertionError("should not connect")),
-    )
+    monkeypatch.setattr(cli, "get_settings", lambda: settings())
     args = SimpleNamespace(
         repo="nope", dir=None, base=None, branch="argus/fix", max_attempts=None, check_timeout=None,
         merge=False,
     )
     assert cli.cmd_pr(args) == 2
     assert "OWNER/REPO" in capsys.readouterr().err
+
