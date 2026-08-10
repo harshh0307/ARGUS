@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.db.engine import init_db, session_factory
-from app.db.models import DetectionRun, SpecSnapshot, Vendor
+from app.db.models import DetectionRun, Repository, SpecSnapshot, Vendor
 from app.registry.vendors import Vendor as VendorSpec
 
 DEFAULT_ENGINE = None
@@ -102,3 +104,29 @@ def persist_detection(settings: Settings, vendor_slug: str, result: dict, spec: 
         raise
     finally:
         session.close()
+
+
+def upsert_repository(session: Session, owner: str, name: str, default_branch: str | None = None) -> Repository:
+    row = session.execute(
+        select(Repository).where(
+            Repository.owner == owner, Repository.name == name
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        row = Repository(owner=owner, name=name, default_branch=default_branch)
+        session.add(row)
+    else:
+        row.default_branch = default_branch or row.default_branch
+    return row
+
+
+def list_active_repositories(session: Session) -> list[Repository]:
+    return list(
+        session.execute(
+            select(Repository).where(Repository.is_active.is_(True))
+        ).scalars()
+    )
+
+
+def touch_repository(session: Session, repo: Repository) -> None:
+    repo.last_run_at = datetime.now(UTC)

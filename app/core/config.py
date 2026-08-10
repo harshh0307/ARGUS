@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     api_base_url: str = "https://api.github.com"
     github_token: str | None = None
     database_url: str | None = None
+    redis_url: str = "redis://localhost:6379/0"
+    celery_broker_url: str | None = None
+    celery_result_backend: str | None = None
     http_timeout_seconds: float = 30.0
     http_max_retries: int = 3
     http_backoff_base_seconds: float = 1.0

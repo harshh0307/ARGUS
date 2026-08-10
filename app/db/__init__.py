@@ -1,3 +1,3 @@
-from app.db.models import DetectionRun, SpecSnapshot, Vendor
+from app.db.models import DetectionRun, Repository, SpecSnapshot, Vendor
 
-__all__ = ["DetectionRun", "SpecSnapshot", "Vendor"]
+__all__ = ["DetectionRun", "Repository", "SpecSnapshot", "Vendor"]

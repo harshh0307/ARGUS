@@ -33,6 +33,7 @@ repo clone ─▶ AST usage scan ─▶ impact report ┤
 | Spec ingestion + snapshot store | ✅ | httpx, content-addressed JSON snapshots (SHA-256) |
 | Vendor registry (multi-vendor) | ✅ | github + stripe + twilio built-ins, `argus vendors` |
 | Postgres/SQLite persistence | ✅ | SQLAlchemy 2.0, psycopg; vendors, snapshots, detection runs |
+| Celery workers + Redis | ✅ | Celery 5.6, Redis broker/backend, beat polling, `scan_and_fix` tasks |
 | Semantic diff engine (breaking-change rules) | ✅ | normalized OpenAPI comparison |
 | AST usage scanner + impact report | ✅ | Python `ast`, constant folding, template path matching |
 | LangGraph fix agent (validate + retry) | ✅ | LangGraph, OpenAI-compatible LLMs |
@@ -93,6 +94,19 @@ argus vendors               # list registered spec vendors (github, stripe, twil
 argus detect                # diff pinned old spec vs. current -> breaking/additive changes
 argus detect --vendor stripe  # run detection for another vendor
 argus scan [DIR]            # scan a repo for call sites hit by breaking changes
+```
+
+### Celery workers (Phase 2)
+
+```powershell
+# worker (executes tasks from Redis)
+celery -A app.workers.celery_app worker --loglevel=info
+
+# beat (polls all vendors every 6h per the schedule)
+celery -A app.workers.celery_app beat --loglevel=info
+```
+
+Tasks: `argus.poll_all_vendors` (beat-scheduled), `argus.run_detection`, `argus.scan_and_fix`, `argus.register_repository`. Requires `DATABASE_URL` and `REDIS_URL` (docker-compose provides Postgres + Redis).
 argus fix [DIR]              # apply LLM fixes in place (add --dry-run to preview diffs)
 argus pr OWNER/REPO          # full loop: detect, scan, fix, open PR, self-heal on CI failure
 argus pr OWNER/REPO --merge  # same, but squash-merge when CI passes
@@ -153,7 +167,7 @@ docker compose up             # scans ./repos with argus scan /repos
 ## Roadmap
 
 - **Phase 1 (MVP):** detection ✅, scanning ✅, fix agent ✅, semantic guard ✅, PR + CI self-heal ✅, merge-on-green ✅, CLI + docker-compose ✅, live demo ✅
-- **Phase 2 (in progress):** vendor registry ✅, Postgres persistence ✅, pipeline service layer 🔄, Celery workers + Redis ⬜, GitHub App OAuth + webhooks ⬜
+- **Phase 2 (in progress):** vendor registry ✅, Postgres persistence ✅, pipeline service layer ✅, Celery workers + Redis ✅, GitHub App OAuth + webhooks ⬜
 - **Phase 3:** AWS deployment — ECS Fargate, RDS, ElastiCache, S3, Terraform, GitHub Actions CI/CD
 - **Phase 4:** JS/TS scanning, per-vendor agents, real-time webhooks, pgvector changelog search
 
