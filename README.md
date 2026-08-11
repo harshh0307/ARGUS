@@ -34,6 +34,8 @@ repo clone ─▶ AST usage scan ─▶ impact report ┤
 | Vendor registry (multi-vendor) | ✅ | github + stripe + twilio built-ins, `argus vendors` |
 | Postgres/SQLite persistence | ✅ | SQLAlchemy 2.0, psycopg; vendors, snapshots, detection runs |
 | Celery workers + Redis | ✅ | Celery 5.6, Redis broker/backend, beat polling, `scan_and_fix` tasks |
+| GitHub App auth (auto-refreshing install tokens) | ✅ | RS256 app JWT → installation access tokens, cached; PAT fallback |
+| FastAPI read API + webhook receiver | ✅ | read-only dashboards, HMAC-verified GitHub webhooks |
 | Semantic diff engine (breaking-change rules) | ✅ | normalized OpenAPI comparison |
 | AST usage scanner + impact report | ✅ | Python `ast`, constant folding, template path matching |
 | LangGraph fix agent (validate + retry) | ✅ | LangGraph, OpenAI-compatible LLMs |
@@ -43,7 +45,7 @@ repo clone ─▶ AST usage scan ─▶ impact report ┤
 | GitHub PR client + CI feedback loop | ✅ | httpx (REST API), Actions job logs |
 | CLI + docker-compose | ✅ | argparse, Docker |
 | Full end-to-end demo (PR self-heal) | ✅ | `scripts/demo_pr.py` (verified live) |
-| Multi-vendor registry, workers, Postgres | Phase 2 | Celery + Redis, PostgreSQL |
+| Multi-vendor registry, workers, Postgres, API | ✅ | Celery + Redis, PostgreSQL, FastAPI |
 | AWS cloud deployment | Phase 3 | ECS Fargate, RDS, Terraform |
 
 ## Project layout
@@ -55,11 +57,16 @@ app/
 ├── detection/     # normalize + semantic diff + breaking-change rules
 ├── scan/          # AST scanner, impact assessment
 ├── fix/           # LangGraph fix agent, patch engine, multi-provider LLM
-├── github/        # GitHub client, CI log extraction, PR self-heal loop
+├── github/        # GitHub client, App token auth, CI logs, PR self-heal loop
+├── registry/      # vendor registry (github, stripe, twilio)
+├── db/            # SQLAlchemy models + persistence layer
+├── services/      # pipeline service layer (shared by CLI, workers, API)
+├── workers/       # Celery app + tasks
+├── api/           # FastAPI read API + webhook receiver
 └── cli.py         # argus detect/scan/fix/pr commands
 scripts/
 └── demo_pr.py     # full live pipeline demo (seed repo -> PR -> CI loop)
-tests/             # pytest suite (93 tests)
+tests/             # pytest suite (133 tests)
 ```
 
 ## Setup
@@ -80,12 +87,14 @@ Copy-Item .env.example .env
 
 | Variable | Required for | Notes |
 |---|---|---|
-| `GITHUB_TOKEN` | `argus pr`, demo | scopes: `repo`, `workflow` |
+| `GITHUB_TOKEN` | `argus pr`, demo | classic PAT; scopes: `repo`, `workflow` |
+| `GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY` / `GITHUB_INSTALL_ID` | alternative to `GITHUB_TOKEN` | GitHub App with repo-access install; tokens auto-renew per request |
+| `WEBHOOK_SECRET` | `api` webhook receiver | verifies `X-Hub-Signature-256`; push events trigger `scan_and_fix` |
 | `GEMINI_API_KEY` / `OPENAI_API_KEY` | `argus fix`, `argus pr` | any OpenAI-compatible provider works via `LLM_BASE_URL` |
 | `OPENROUTER_API_KEY` | fallback when primary LLM is rate-limited | free model: `nvidia/nemotron-3-ultra-550b-a55b:free` (verified) |
 | `OPENROUTER_MODEL` | — | default `nvidia/nemotron-3-ultra-550b-a55b:free` |
 | `LLM_MODEL` | — | default `gpt-4o-mini` |
-| `DATABASE_URL` | `argus detect` persistence | optional; `sqlite:///data/argus.db` or `postgresql+psycopg://...` (docker-compose has Postgres 16) |
+| `DATABASE_URL` | `argus detect` persistence, API read endpoints | optional; `sqlite:///data/argus.db` or `postgresql+psycopg://...` (docker-compose has Postgres 16) |
 
 ## Usage
 
@@ -111,6 +120,23 @@ argus fix [DIR]              # apply LLM fixes in place (add --dry-run to previe
 argus pr OWNER/REPO          # full loop: detect, scan, fix, open PR, self-heal on CI failure
 argus pr OWNER/REPO --merge  # same, but squash-merge when CI passes
 ```
+
+### FastAPI (Phase 2)
+
+```powershell
+uvicorn app.api.main:app --host 0.0.0.0 --port 8000
+```
+
+| Endpoint | Description |
+|---|---|
+| `GET /health` | liveness + database flag |
+| `GET /api/v1/vendors` / `/api/v1/vendors/{slug}` | vendor registry |
+| `GET /api/v1/detection-runs` / `.../{run_id}` | detection history from Postgres |
+| `GET /api/v1/repositories` | registered repos |
+| `POST /api/v1/repositories` | register a repo (`{owner, name, default_branch}`) |
+| `POST /api/v1/webhook` | GitHub webhook receiver (`X-GitHub-Events: push`); HMAC-verified (needs `WEBHOOK_SECRET`), dispatches `scan_and_fix` for registered repos (falls back to inline runs when Redis is down) |
+
+Point `https://your.host/webhook` at the repo's GitHub webhook with content type `application/json` and a secret matching `WEBHOOK_SECRET`.
 
 Example:
 
@@ -141,6 +167,7 @@ argus pr acme/website --merge      # squash-merge when CI passes
 docker build -t argus:local .
 docker run --rm argus:local detect
 docker compose up             # scans ./repos with argus scan /repos
+docker compose up api         # FastAPI on :8000 (with postgres + redis)
 ```
 
 ## Test & lint
@@ -167,7 +194,7 @@ docker compose up             # scans ./repos with argus scan /repos
 ## Roadmap
 
 - **Phase 1 (MVP):** detection ✅, scanning ✅, fix agent ✅, semantic guard ✅, PR + CI self-heal ✅, merge-on-green ✅, CLI + docker-compose ✅, live demo ✅
-- **Phase 2 (in progress):** vendor registry ✅, Postgres persistence ✅, pipeline service layer ✅, Celery workers + Redis ✅, GitHub App OAuth + webhooks ⬜
+- **Phase 2 (in progress):** vendor registry ✅, Postgres persistence ✅, pipeline service layer ✅, Celery workers + Redis ✅, GitHub App OAuth + webhooks ✅, FastAPI read API ✅
 - **Phase 3:** AWS deployment — ECS Fargate, RDS, ElastiCache, S3, Terraform, GitHub Actions CI/CD
 - **Phase 4:** JS/TS scanning, per-vendor agents, real-time webhooks, pgvector changelog search
 
@@ -175,5 +202,5 @@ docker compose up             # scans ./repos with argus scan /repos
 
 - Scans `requests`/`httpx` style HTTP calls; `requests.request("GET", ...)` style and async clients not yet supported
 - Response-body usage analysis not yet supported
-- Only the GitHub REST API vendor is wired (multi-vendor comes in Phase 2)
+- GitHub App private key must be kept secret; classic PATs work as a simpler fallback
 - Free-tier LLMs may produce no-op patches; the semantic guard catches these but adds latency (paid models fix this entirely)

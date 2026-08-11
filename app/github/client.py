@@ -4,6 +4,7 @@ import base64
 
 import httpx
 
+from app.github.app_auth import PatTokenProvider, TokenProvider, build_token_provider
 from app.github.models import CheckResult, PullRequest
 
 
@@ -14,17 +15,23 @@ class GitHubApiError(Exception):
 class GitHubClient:
     def __init__(
         self,
-        token: str,
+        token: str | None = None,
+        token_provider: TokenProvider | None = None,
         base_url: str = "https://api.github.com",
         timeout: float = 30.0,
         client: httpx.Client | None = None,
     ):
-        if not token:
-            raise ValueError("a GitHub token is required to build a GitHubClient")
+        if token_provider is None:
+            if token:
+                token_provider = PatTokenProvider(token)
+            else:
+                from app.core.config import get_settings
+
+                token_provider = build_token_provider(get_settings())
+        self._token_provider = token_provider
         self._base_url = base_url.rstrip("/")
         self._client = client or httpx.Client(
             headers={
-                "Authorization": f"Bearer {token}",
                 "Accept": "application/vnd.github+json",
                 "X-GitHub-Api-Version": "2022-11-28",
                 "User-Agent": "argus/0.1 (api-change-agent)",
@@ -33,8 +40,16 @@ class GitHubClient:
             follow_redirects=True,
         )
 
+    def _auth_headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self._token_provider.get_token()}"}
+
     def _request(self, method: str, path: str, **kwargs) -> dict | None:
-        response = self._client.request(method, f"{self._base_url}{path}", **kwargs)
+        response = self._client.request(
+            method,
+            f"{self._base_url}{path}",
+            headers=self._auth_headers(),
+            **kwargs,
+        )
         if response.status_code == 404:
             return None
         if response.status_code == 204:
@@ -46,7 +61,12 @@ class GitHubClient:
         return response.json()
 
     def _request_text(self, method: str, path: str, **kwargs) -> str | None:
-        response = self._client.request(method, f"{self._base_url}{path}", **kwargs)
+        response = self._client.request(
+            method,
+            f"{self._base_url}{path}",
+            headers=self._auth_headers(),
+            **kwargs,
+        )
         if response.status_code == 404:
             return None
         if response.status_code >= 400:
@@ -183,7 +203,11 @@ class GitHubClient:
         params = {}
         if ref:
             params["ref"] = ref
-        response = self._client.get(f"{self._base_url}/repos/{owner}/{repo}/tarball", params=params)
+        response = self._client.get(
+            f"{self._base_url}/repos/{owner}/{repo}/tarball",
+            params=params,
+            headers=self._auth_headers(),
+        )
         if response.status_code >= 400:
             raise GitHubApiError(f"GET tarball {owner}/{repo} -> {response.status_code}")
         return response.content

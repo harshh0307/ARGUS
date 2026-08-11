@@ -153,8 +153,12 @@ def cmd_fix(args) -> int:
 
 def cmd_pr(args) -> int:
     settings = get_settings()
-    if not settings.github_token:
-        print("error: GITHUB_TOKEN is not set", file=sys.stderr)
+    from app.github.app_auth import build_token_provider
+
+    try:
+        build_token_provider(settings)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
         return 2
     owner, sep, repo = args.repo.partition("/")
     if not sep or not repo:

@@ -1,0 +1,243 @@
+import hashlib
+import hmac
+import json
+
+from fastapi.testclient import TestClient
+
+from app.api.main import create_app
+from app.core.config import Settings
+from app.db.engine import get_engine, init_db, session_factory
+from app.db.models import DetectionRun, Repository, Vendor
+from app.db.repository import set_default_engine
+
+
+def make_app(database_url=None, webhook_secret=None, **overrides):
+    defaults = {
+        "database_url": database_url,
+        "webhook_secret": webhook_secret,
+        "github_token": "pat-token",
+        "api_base_url": "https://api.github.com",
+        "github_app_id": None,
+        "github_app_private_key": None,
+        "github_install_id": None,
+    }
+    defaults.update(overrides)
+    return create_app(Settings(**defaults))
+
+
+def seeded_engine(tmp_path):
+    url = f"sqlite:///{tmp_path / 'api.db'}"
+    engine = get_engine(url)
+    init_db(engine)
+    set_default_engine(engine)
+    return engine
+
+
+def seed(engine, rows):
+    session = session_factory(engine)()
+    session.add_all(rows)
+    session.commit()
+    ids = {type(r).__name__: r.id for r in rows if getattr(r, "id", None) is not None}
+    session.close()
+    return ids
+
+
+def sign(secret, payload):
+    if isinstance(payload, str):
+        payload = payload.encode("utf-8")
+    digest = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+    return f"sha256={digest}"
+
+
+def push_payload(owner="octo", repo="demo"):
+    return json.dumps(
+        {
+            "repository": {
+                "owner": {"login": owner},
+                "name": repo,
+                "full_name": f"{owner}/{repo}",
+            },
+            "ref": "refs/heads/main",
+        }
+    ).encode("utf-8")
+
+
+def test_health_reports_no_database():
+    client = TestClient(make_app(database_url=None))
+    assert client.get("/health").json() == {"status": "ok", "database": False}
+
+
+def test_health_reports_database(tmp_path):
+    engine = seeded_engine(tmp_path)
+    client = TestClient(make_app(database_url=engine.url.render_as_string(hide_password=False)))
+    assert client.get("/health").json()["database"] is True
+
+
+def test_list_vendors():
+    client = TestClient(make_app())
+    response = client.get("/api/v1/vendors")
+    assert response.status_code == 200
+    slugs = {item["slug"] for item in response.json()}
+    assert slugs == {"github", "stripe", "twilio"}
+    github = next(item for item in response.json() if item["slug"] == "github")
+    assert github["poll_interval_seconds"] == 21600
+
+
+def test_vendor_by_slug():
+    client = TestClient(make_app())
+    response = client.get("/api/v1/vendors/stripe")
+    assert response.status_code == 200
+    assert response.json()["name"] == "Stripe"
+
+
+def test_vendor_by_slug_unknown():
+    client = TestClient(make_app())
+    assert client.get("/api/v1/vendors/nope").status_code == 404
+
+
+def test_detection_runs_require_database():
+    client = TestClient(make_app(database_url=None))
+    assert client.get("/api/v1/detection-runs").status_code == 503
+
+
+def test_detection_runs_listing(tmp_path):
+    engine = seeded_engine(tmp_path)
+    url = engine.url.render_as_string(hide_password=False)
+    seed(
+        engine,
+        [
+            Vendor(slug="stripe", name="Stripe", spec_url="https://s"),
+            DetectionRun(
+                vendor_slug="stripe",
+                old_digest="old1",
+                new_digest="new1",
+                breaking_count=2,
+                additive_count=1,
+                changes=[{"kind": "endpoint_removed", "severity": "breaking"}],
+            ),
+        ],
+    )
+    client = TestClient(make_app(database_url=url))
+    response = client.get("/api/v1/detection-runs")
+    assert response.status_code == 200
+    rows = response.json()
+    assert len(rows) == 1
+    assert rows[0]["vendor_slug"] == "stripe"
+    assert rows[0]["breaking_count"] == 2
+    assert rows[0]["changes"][0]["kind"] == "endpoint_removed"
+
+    one = client.get(f"/api/v1/detection-runs/{rows[0]['id']}")
+    assert one.status_code == 200
+    assert one.json()["new_digest"] == "new1"
+
+    assert client.get("/api/v1/detection-runs/999").status_code == 404
+
+
+def test_repositories_register_and_list(tmp_path):
+    engine = seeded_engine(tmp_path)
+    url = engine.url.render_as_string(hide_password=False)
+    client = TestClient(make_app(database_url=url))
+
+    created = client.post(
+        "/api/v1/repositories",
+        json={"owner": "acme", "name": "website", "default_branch": "main"},
+    )
+    assert created.status_code == 201
+    repo_id = created.json()["id"]
+    assert repo_id > 0
+
+    rows = client.get("/api/v1/repositories").json()
+    assert len(rows) == 1
+    assert rows[0]["owner"] == "acme"
+    assert rows[0]["is_active"] is True
+
+    again = client.post(
+        "/api/v1/repositories", json={"owner": "acme", "name": "website"}
+    )
+    assert again.json()["id"] == repo_id
+
+
+def test_webhook_requires_secret():
+    client = TestClient(make_app(database_url=None, webhook_secret=None))
+    assert client.post("/api/v1/webhook", content=b"{}").status_code == 503
+
+
+def test_webhook_bad_signature():
+    client = TestClient(make_app(database_url=None, webhook_secret="s3cret"))
+    response = client.post("/api/v1/webhook", content=b"{}")
+    assert response.status_code == 401
+
+    response = client.post(
+        "/api/v1/webhook",
+        content=b"{}",
+        headers={"X-Hub-Signature-256": "sha256=deadbeef"},
+    )
+    assert response.status_code == 401
+
+
+def test_webhook_ping_ignored():
+    client = TestClient(make_app(database_url=None, webhook_secret="s3cret"))
+    response = client.post(
+        "/api/v1/webhook",
+        content=b"{}",
+        headers={
+            "X-GitHub-Event": "ping",
+            "X-Hub-Signature-256": sign("s3cret", b"{}"),
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["reason"] == "ignored event"
+
+
+def test_webhook_push_not_registered(tmp_path):
+    engine = seeded_engine(tmp_path)
+    url = engine.url.render_as_string(hide_password=False)
+    client = TestClient(make_app(database_url=url, webhook_secret="s3cret"))
+    payload = push_payload(owner="ghost", repo="nowhere")
+    response = client.post(
+        "/api/v1/webhook",
+        content=payload,
+        headers={
+            "X-GitHub-Event": "push",
+            "X-Hub-Signature-256": sign("s3cret", payload),
+        },
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "event": "push",
+        "dispatched": False,
+        "reason": "repository not registered",
+    }
+
+
+def test_webhook_push_registered_dispatches(tmp_path, monkeypatch):
+    engine = seeded_engine(tmp_path)
+    url = engine.url.render_as_string(hide_password=False)
+    ids = seed(
+        engine,
+        [Repository(owner="octo", name="demo", default_branch="main", is_active=True)],
+    )
+    dispatched = {}
+
+    def fake_dispatch(repository_id, merge=True):
+        dispatched["repository_id"] = repository_id
+        return True
+
+    from app.api import main as api_main
+
+    monkeypatch.setattr(api_main, "_dispatch_scan_and_fix", fake_dispatch)
+
+    client = TestClient(make_app(database_url=url, webhook_secret="s3cret"))
+    payload = push_payload()
+    response = client.post(
+        "/api/v1/webhook",
+        content=payload,
+        headers={
+            "X-GitHub-Event": "push",
+            "X-Hub-Signature-256": sign("s3cret", payload),
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["dispatched"] is True
+    assert dispatched == {"repository_id": ids["Repository"]}

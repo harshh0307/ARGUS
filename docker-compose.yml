@@ -43,5 +43,17 @@ services:
       - redis
     command: ["beat", "--loglevel=info"]
 
+  api:
+    build: .
+    image: argus:local
+    entrypoint: ["uvicorn", "app.api.main:app"]
+    env_file: .env
+    depends_on:
+      - postgres
+      - redis
+    ports:
+      - "8000:8000"
+    command: ["--host", "0.0.0.0", "--port", "8000"]
+
 volumes:
   pgdata:

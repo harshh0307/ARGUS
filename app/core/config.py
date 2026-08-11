@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     snapshot_dir: str = "data/snapshots"
     api_base_url: str = "https://api.github.com"
     github_token: str | None = None
+    github_app_id: int | None = None
+    github_app_private_key: str | None = None
+    github_install_id: int | None = None
+    webhook_secret: str | None = None
+    api_host: str = "0.0.0.0"
+    api_port: int = 8000
     database_url: str | None = None
     redis_url: str = "redis://localhost:6379/0"
     celery_broker_url: str | None = None
