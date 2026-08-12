@@ -112,7 +112,7 @@ def test_fix_dry_run_prints_diff(monkeypatch, tmp_path, capsys):
         run_detection=lambda s, **kw: {"changes": [change()]},
         ApiScanner=lambda **kw: FakeScanner([usage()]),
         assess_impact=lambda usages, changes: [impact()],
-        build_suggestion_model=lambda s: object(),
+        build_suggestion_model=lambda s, vendor_slug=None: object(),
         fix_impact_on_content=lambda *a, **k: ("import requests\nresp = []\n", None),
     )
     args = SimpleNamespace(dir=str(tmp_path), dry_run=True, max_attempts=None)
@@ -129,7 +129,7 @@ def test_fix_applies_in_directory(monkeypatch, tmp_path):
     target.write_text("old")
     captured = {}
 
-    def fake_run_fix(impacts, model, max_attempts, base_url=None):
+    def fake_run_fix(impacts, model, max_attempts, base_url=None, vendor_guidance=None):
         captured["impacts"] = impacts
         captured["model"] = model
         captured["max_attempts"] = max_attempts
@@ -141,7 +141,7 @@ def test_fix_applies_in_directory(monkeypatch, tmp_path):
         run_detection=lambda s, **kw: {"changes": [change()]},
         ApiScanner=lambda **kw: FakeScanner([usage()]),
         assess_impact=lambda usages, changes: [impact()],
-        build_suggestion_model=lambda s: object(),
+        build_suggestion_model=lambda s, vendor_slug=None: object(),
         run_fix=fake_run_fix,
     )
     args = SimpleNamespace(dir=str(tmp_path), dry_run=False, max_attempts=5)
@@ -156,7 +156,7 @@ def test_fix_missing_key_returns_2(monkeypatch, tmp_path, capsys):
         run_detection=lambda s, **kw: {"changes": [change()]},
         ApiScanner=lambda **kw: FakeScanner([usage()]),
         assess_impact=lambda usages, changes: [impact()],
-        build_suggestion_model=lambda s: (_ for _ in ()).throw(ValueError("no key")),
+        build_suggestion_model=lambda s, vendor_slug=None: (_ for _ in ()).throw(ValueError("no key")),
     )
     args = SimpleNamespace(dir=str(tmp_path), dry_run=True, max_attempts=None)
     assert cli.cmd_fix(args) == 2
@@ -224,7 +224,7 @@ def test_pr_command_runs_full_loop(monkeypatch, tmp_path, capsys):
         GitHubClient=lambda token: fake_client,
         ApiScanner=lambda **kw: FakeScanner([usage()]),
         assess_impact=lambda usages, changes: [impact()],
-        build_suggestion_model=lambda s: object(),
+        build_suggestion_model=lambda s, vendor_slug=None: object(),
         run_pr_loop=fake_pr_loop,
     )
     args = SimpleNamespace(
@@ -260,7 +260,7 @@ def test_pr_command_merges_when_passed_and_flag_set(monkeypatch, tmp_path, capsy
         GitHubClient=lambda token: fake_client,
         ApiScanner=lambda **kw: FakeScanner([usage()]),
         assess_impact=lambda usages, changes: [impact()],
-        build_suggestion_model=lambda s: object(),
+        build_suggestion_model=lambda s, vendor_slug=None: object(),
         run_pr_loop=fake_pr_loop,
     )
     args = SimpleNamespace(
@@ -291,7 +291,7 @@ def test_pr_command_does_not_merge_when_failed(monkeypatch, tmp_path):
         GitHubClient=lambda token: fake_client,
         ApiScanner=lambda **kw: FakeScanner([usage()]),
         assess_impact=lambda usages, changes: [impact()],
-        build_suggestion_model=lambda s: object(),
+        build_suggestion_model=lambda s, vendor_slug=None: object(),
         run_pr_loop=fake_pr_loop,
     )
     args = SimpleNamespace(
@@ -323,7 +323,7 @@ def test_pr_command_merge_rejection_warns(monkeypatch, tmp_path, capsys):
         GitHubClient=lambda token: fake_client,
         ApiScanner=lambda **kw: FakeScanner([usage()]),
         assess_impact=lambda usages, changes: [impact()],
-        build_suggestion_model=lambda s: object(),
+        build_suggestion_model=lambda s, vendor_slug=None: object(),
         run_pr_loop=fake_pr_loop,
     )
     args = SimpleNamespace(

@@ -9,10 +9,10 @@ from langgraph.graph import END, START, StateGraph
 
 from app.core.config import Settings
 from app.fix.models import FixResult, PatchSuggestion
-from app.fix.patch import apply_patch, validate_python
+from app.fix.patch import apply_patch, validate_source
 from app.fix.prompt import build_prompt
 from app.scan.impact import match_path
-from app.scan.scanner import ApiScanner
+from app.scan.scanner import ApiScanner, language_for_file
 
 RETRY_DELAY_RE = re.compile(r"retry in ([\d.]+)s")
 
@@ -32,6 +32,8 @@ class FixState(TypedDict, total=False):
     patched_content: str | None
     error: str | None
     attempts: int
+    language: str
+    vendor_guidance: str | None
 
 
 class SuggestionModel:
@@ -96,11 +98,23 @@ class SuggestionModel:
         raise last_exc or RuntimeError("fallback LLM failed")
 
 
-def build_suggestion_model(settings: Settings) -> SuggestionModel:
+def build_suggestion_model(
+    settings: Settings, vendor_slug: str | None = None
+) -> SuggestionModel:
+    model_name = settings.llm_model
+    if vendor_slug:
+        try:
+            from app.registry.vendors import get_vendor
+
+            vendor = get_vendor(settings, vendor_slug)
+            if vendor.fix_model:
+                model_name = vendor.fix_model
+        except ValueError:
+            pass
     api_key = settings.gemini_api_key or settings.openai_api_key
     return SuggestionModel(
         api_key=api_key,
-        model_name=settings.llm_model,
+        model_name=model_name,
         base_url=settings.llm_base_url,
         fallback_api_key=settings.openrouter_api_key,
         fallback_model=settings.openrouter_model or "nvidia/nemotron-3-ultra-550b-a55b:free",
@@ -112,7 +126,14 @@ def build_fix_graph(suggestion_model, max_attempts: int = 3, base_url: str | Non
     def generate(state: FixState) -> dict:
         impact = state["impact"]
         context = numbered_context(state["file_content"], impact["line"])
-        prompt = build_prompt(impact, state["file_path"], context, state.get("error"))
+        prompt = build_prompt(
+            impact,
+            state["file_path"],
+            context,
+            state.get("error"),
+            language=state.get("language", "py"),
+            vendor_guidance=state.get("vendor_guidance"),
+        )
         return {
             "patch": suggestion_model.suggest(prompt),
             "attempts": state.get("attempts", 0) + 1,
@@ -125,9 +146,14 @@ def build_fix_graph(suggestion_model, max_attempts: int = 3, base_url: str | Non
     def validate(state: FixState) -> dict:
         if state.get("patched_content") is None:
             return {}
-        err = validate_python(state["patched_content"])
+        err = validate_source(state["patched_content"], state.get("language", "py"))
         if err is None:
-            err = _still_calls_error(state["patched_content"], state["impact"], base_url)
+            err = _still_calls_error(
+                state["patched_content"],
+                state["impact"],
+                base_url,
+                state.get("language", "py"),
+            )
         return {"error": err}
 
     def route(state: FixState) -> str:
@@ -165,13 +191,21 @@ def impact_to_dict(impact) -> dict:
         "change_severity": impact.change.severity,
         "change_path": impact.change.path,
         "change_detail": impact.change.detail,
+        "language": language_for_file(impact.usage.file),
     }
 
 
-def _still_calls_error(content: str, impact: dict, base_url: str | None) -> str | None:
+def _still_calls_error(
+    content: str,
+    impact: dict,
+    base_url: str | None,
+    language: str = "py",
+) -> str | None:
     if base_url is None or impact.get("change_kind") != "endpoint_removed":
         return None
-    usages = ApiScanner(base_url=base_url).scan_source(content, filename="patched")
+    usages = ApiScanner(base_url=base_url).scan_source(
+        content, filename="patched", language=language
+    )
     for usage in usages:
         if usage.method == impact["method"] and match_path(usage.path, impact["change_path"]):
             return (
@@ -206,6 +240,7 @@ def fix_impact_on_content(
     previous_error: str | None = None,
     max_attempts: int = 3,
     base_url: str | None = None,
+    vendor_guidance: str | None = None,
 ) -> tuple[str | None, str | None]:
     graph = _get_or_build_graph(suggestion_model, max_attempts, base_url, _GRAPH_CACHE)
     final = _invoke_graph(
@@ -216,13 +251,21 @@ def fix_impact_on_content(
             "file_content": content,
             "error": previous_error,
             "attempts": 0,
+            "language": language_for_file(file_path),
+            "vendor_guidance": vendor_guidance,
         },
     )
     success = final.get("error") is None and final.get("patched_content") is not None
     return (final.get("patched_content"), None) if success else (None, final.get("error"))
 
 
-def run_fix(impacts, suggestion_model, max_attempts: int = 3, base_url: str | None = None) -> list[FixResult]:
+def run_fix(
+    impacts,
+    suggestion_model,
+    max_attempts: int = 3,
+    base_url: str | None = None,
+    vendor_guidance: str | None = None,
+) -> list[FixResult]:
     graph = _get_or_build_graph(suggestion_model, max_attempts, base_url, _GRAPH_CACHE)
     contents: dict[str, str] = {}
     results: list[FixResult] = []
@@ -238,6 +281,8 @@ def run_fix(impacts, suggestion_model, max_attempts: int = 3, base_url: str | No
                 "file_content": contents[path],
                 "error": None,
                 "attempts": 0,
+                "language": language_for_file(impact.usage.file),
+                "vendor_guidance": vendor_guidance,
             },
         )
         success = final.get("error") is None and final.get("patched_content") is not None

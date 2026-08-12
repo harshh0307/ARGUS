@@ -65,7 +65,7 @@ def test_fix_directory_dry_run_returns_steps(monkeypatch, tmp_path):
         "fix_impact_on_content",
         lambda *a, **k: ("import requests\nresp = []\n", None),
     )
-    monkeypatch.setattr(pipeline, "build_suggestion_model", lambda s: object())
+    monkeypatch.setattr(pipeline, "build_suggestion_model", lambda s, vendor_slug=None: object())
 
     outcome = pipeline.fix_directory(settings(), tmp_path, dry_run=True)
 
@@ -133,7 +133,7 @@ def test_run_repo_pipeline_delegates_to_pr_loop(monkeypatch, tmp_path):
     monkeypatch.setattr(pipeline, "ApiScanner", lambda **kw: FakeScanner([usage()]))
     monkeypatch.setattr(pipeline, "assess_impact", lambda usages, changes: [impact()])
     monkeypatch.setattr(pipeline, "GitHubClient", lambda token: fake_client)
-    monkeypatch.setattr(pipeline, "build_suggestion_model", lambda s: object())
+    monkeypatch.setattr(pipeline, "build_suggestion_model", lambda s, vendor_slug=None: object())
     monkeypatch.setattr(pipeline, "run_pr_loop", fake_pr_loop)
 
     outcome = pipeline.run_repo_pipeline(
@@ -167,7 +167,7 @@ def test_run_repo_pipeline_merge_on_green(monkeypatch, tmp_path):
     monkeypatch.setattr(pipeline, "ApiScanner", lambda **kw: FakeScanner([usage()]))
     monkeypatch.setattr(pipeline, "assess_impact", lambda usages, changes: [impact()])
     monkeypatch.setattr(pipeline, "GitHubClient", lambda token: fake_client)
-    monkeypatch.setattr(pipeline, "build_suggestion_model", lambda s: object())
+    monkeypatch.setattr(pipeline, "build_suggestion_model", lambda s, vendor_slug=None: object())
     monkeypatch.setattr(pipeline, "run_pr_loop", fake_pr_loop)
 
     outcome = pipeline.run_repo_pipeline(settings(), "o", "r", local_dir=tmp_path, merge=True)

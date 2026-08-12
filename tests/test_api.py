@@ -241,3 +241,110 @@ def test_webhook_push_registered_dispatches(tmp_path, monkeypatch):
     assert response.status_code == 200
     assert response.json()["dispatched"] is True
     assert dispatched == {"repository_id": ids["Repository"]}
+
+
+def _post_webhook(client, event, payload):
+    body = json.dumps(payload).encode("utf-8")
+    return client.post(
+        "/api/v1/webhook",
+        content=body,
+        headers={
+            "X-GitHub-Event": event,
+            "X-Hub-Signature-256": sign("s3cret", body),
+        },
+    )
+
+
+def test_webhook_unknown_event_ignored(tmp_path):
+    engine = seeded_engine(tmp_path)
+    url = engine.url.render_as_string(hide_password=False)
+    client = TestClient(make_app(database_url=url, webhook_secret="s3cret"))
+    response = _post_webhook(client, "star", {"action": "created"})
+    assert response.status_code == 200
+    assert response.json()["reason"] == "ignored event"
+
+
+def test_webhook_installation_created_registers_install(tmp_path):
+    engine = seeded_engine(tmp_path)
+    url = engine.url.render_as_string(hide_password=False)
+    client = TestClient(make_app(database_url=url, webhook_secret="s3cret"))
+    response = _post_webhook(
+        client,
+        "installation",
+        {
+            "action": "created",
+            "installation": {"id": 42, "account": {"login": "acme"}},
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["reason"] == "installation created -> owner acme active=True"
+    installs = client.get("/api/v1/installations").json()
+    assert len(installs) == 1
+    assert installs[0]["install_id"] == 42
+    assert installs[0]["owner"] == "acme"
+    assert installs[0]["is_active"] is True
+
+
+def test_webhook_installation_deleted_deactivates(tmp_path):
+    engine = seeded_engine(tmp_path)
+    url = engine.url.render_as_string(hide_password=False)
+    client = TestClient(make_app(database_url=url, webhook_secret="s3cret"))
+    _post_webhook(
+        client,
+        "installation",
+        {
+            "action": "created",
+            "installation": {"id": 7, "account": {"login": "acme"}},
+        },
+    )
+    response = _post_webhook(
+        client,
+        "installation",
+        {
+            "action": "deleted",
+            "installation": {"id": 7, "account": {"login": "acme"}},
+        },
+    )
+    assert response.json()["reason"] == "installation deleted -> owner acme active=False"
+    installs = client.get("/api/v1/installations").json()
+    assert installs[0]["is_active"] is False
+
+
+def test_webhook_repository_dispatch_dispatches(tmp_path, monkeypatch):
+    engine = seeded_engine(tmp_path)
+    url = engine.url.render_as_string(hide_password=False)
+    ids = seed(
+        engine,
+        [Repository(owner="octo", name="demo", default_branch="main", is_active=True)],
+    )
+    dispatched = {}
+
+    def fake_dispatch(repository_id, merge=True):
+        dispatched["repository_id"] = repository_id
+        return True
+
+    from app.api import main as api_main
+
+    monkeypatch.setattr(api_main, "_dispatch_scan_and_fix", fake_dispatch)
+
+    client = TestClient(make_app(database_url=url, webhook_secret="s3cret"))
+    response = _post_webhook(
+        client,
+        "repository_dispatch",
+        {"action": "argus-scan", "repository": {"owner": {"login": "octo"}, "name": "demo"}},
+    )
+    assert response.status_code == 200
+    assert response.json()["dispatched"] is True
+    assert dispatched == {"repository_id": ids["Repository"]}
+
+
+def test_webhook_repository_dispatch_unregistered(tmp_path):
+    engine = seeded_engine(tmp_path)
+    url = engine.url.render_as_string(hide_password=False)
+    client = TestClient(make_app(database_url=url, webhook_secret="s3cret"))
+    response = _post_webhook(
+        client,
+        "repository_dispatch",
+        {"action": "argus-scan", "repository": {"owner": {"login": "ghost"}, "name": "nowhere"}},
+    )
+    assert response.json()["reason"] == "repository not registered"

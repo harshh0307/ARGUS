@@ -11,7 +11,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.schemas import (
+    ChangelogHitOut,
     DetectionRunOut,
+    InstallationOut,
     RepositoryCreated,
     RepositoryIn,
     RepositoryOut,
@@ -78,6 +80,73 @@ def _dispatch_scan_and_fix(repository_id: int, merge: bool = True) -> bool:
             daemon=True,
         ).start()
         return False
+
+
+def _repo_from_push(payload: dict) -> tuple[str, str]:
+    return payload["repository"]["owner"]["login"], payload["repository"]["name"]
+
+
+def _handle_push(payload: dict, settings: Settings) -> WebhookOut:
+    owner, name = _repo_from_push(payload)
+    session = _db_session(settings)
+    try:
+        repo = session.execute(
+            select(Repository).where(Repository.owner == owner, Repository.name == name)
+        ).scalar_one_or_none()
+    finally:
+        session.close()
+    if repo is None or not repo.is_active:
+        return WebhookOut(ok=True, event="push", dispatched=False, reason="repository not registered")
+    dispatched = _dispatch_scan_and_fix(repo.id)
+    return WebhookOut(ok=True, event="push", dispatched=dispatched)
+
+
+def _handle_installation(payload: dict, settings: Settings) -> WebhookOut:
+    from app.db.repository import upsert_app_installation
+
+    action = payload.get("action", "")
+    install_id = payload["installation"]["id"]
+    owner = payload["installation"]["account"]["login"]
+    if action in ("deleted", "unsuspended"):
+        is_active = False
+    elif action in ("created", "suspend"):
+        is_active = True
+    else:
+        return WebhookOut(ok=True, event="installation", reason=f"ignored action {action!r}")
+    session = _db_session(settings)
+    try:
+        upsert_app_installation(session, install_id, owner, is_active=is_active)
+        session.commit()
+    finally:
+        session.close()
+    return WebhookOut(
+        ok=True,
+        event="installation",
+        dispatched=False,
+        reason=f"installation {action} -> owner {owner} active={is_active}",
+    )
+
+
+def _handle_repository_dispatch(payload: dict, settings: Settings) -> WebhookOut:
+    owner, name = _repo_from_push(payload)
+    session = _db_session(settings)
+    try:
+        repo = session.execute(
+            select(Repository).where(Repository.owner == owner, Repository.name == name)
+        ).scalar_one_or_none()
+    finally:
+        session.close()
+    if repo is None or not repo.is_active:
+        return WebhookOut(ok=True, event="repository_dispatch", dispatched=False, reason="repository not registered")
+    dispatched = _dispatch_scan_and_fix(repo.id)
+    return WebhookOut(ok=True, event="repository_dispatch", dispatched=dispatched)
+
+
+_WEBHOOK_HANDLERS = {
+    "push": _handle_push,
+    "installation": _handle_installation,
+    "repository_dispatch": _handle_repository_dispatch,
+}
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -166,6 +235,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     id=r.id,
                     owner=r.owner,
                     name=r.name,
+                    vendor_slug=r.vendor_slug,
                     default_branch=r.default_branch,
                     is_active=r.is_active,
                     last_run_at=r.last_run_at,
@@ -183,10 +253,69 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session = _db_session(settings)
         try:
             row = upsert_repository(
-                session, payload.owner, payload.name, payload.default_branch
+                session,
+                payload.owner,
+                payload.name,
+                payload.default_branch,
+                payload.vendor_slug,
             )
             session.commit()
             return RepositoryCreated(id=row.id)
+        finally:
+            session.close()
+
+    @app.get("/api/v1/installations", response_model=list[InstallationOut])
+    def installations(settings: SettingsDep) -> list[InstallationOut]:
+        from app.db.repository import list_installations
+
+        session = _db_session(settings)
+        try:
+            rows = list_installations(session)
+            return [
+                InstallationOut(
+                    id=r.id,
+                    install_id=r.install_id,
+                    owner=r.owner,
+                    is_active=r.is_active,
+                    created_at=r.created_at,
+                )
+                for r in rows
+            ]
+        finally:
+            session.close()
+
+    @app.get("/api/v1/search/changelog", response_model=list[ChangelogHitOut])
+    def search_changelog(
+        settings: SettingsDep,
+        q: str = Query("", description="search terms"),
+        vendor: str | None = Query(None),
+        limit: int = Query(10, ge=1, le=100),
+    ) -> list[ChangelogHitOut]:
+        from app.db.repository import search_changelog as search_rows
+        from app.search.embeddings import build_embedder
+
+        session = _db_session(settings)
+        try:
+            hits = search_rows(
+                session,
+                q,
+                vendor_slug=vendor,
+                limit=limit,
+                embedder=build_embedder(settings),
+            )
+            return [
+                ChangelogHitOut(
+                    id=row.id,
+                    vendor_slug=row.vendor_slug,
+                    kind=row.kind,
+                    path=row.path,
+                    method=row.method,
+                    detail=row.detail,
+                    score=score,
+                    created_at=row.created_at,
+                )
+                for row, score in hits
+            ]
         finally:
             session.close()
 
@@ -201,27 +330,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         body = await request.body()
         if not _verify_signature(settings.webhook_secret, request.headers.get("X-Hub-Signature-256"), body):
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid webhook signature")
-        if event != "push":
-            return WebhookOut(ok=True, event=event, dispatched=False, reason="ignored event")
         try:
             payload = json.loads(body)
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid JSON payload") from exc
-        owner = payload["repository"]["owner"]["login"]
-        name = payload["repository"]["name"]
-        session = _db_session(settings)
-        try:
-            repo = session.execute(
-                select(Repository).where(
-                    Repository.owner == owner, Repository.name == name
-                )
-            ).scalar_one_or_none()
-        finally:
-            session.close()
-        if repo is None or not repo.is_active:
-            return WebhookOut(ok=True, event=event, dispatched=False, reason="repository not registered")
-        dispatched = _dispatch_scan_and_fix(repo.id)
-        return WebhookOut(ok=True, event=event, dispatched=dispatched)
+
+        handler = _WEBHOOK_HANDLERS.get(event)
+        if handler is None:
+            return WebhookOut(ok=True, event=event, dispatched=False, reason="ignored event")
+        return handler(payload, settings)
 
     return app
 

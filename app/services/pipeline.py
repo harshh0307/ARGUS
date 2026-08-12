@@ -50,17 +50,28 @@ def scan_changes(settings: Settings, vendor_slug: str, root: Path) -> list:
     return assess_impact(usages, detection["changes"])
 
 
+def _vendor_guidance(settings: Settings, vendor_slug: str) -> str | None:
+    try:
+        from app.registry.vendors import get_vendor
+
+        return get_vendor(settings, vendor_slug).fix_guidance
+    except (ValueError, AttributeError):
+        return None
+
+
 def fix_directory(
     settings: Settings,
     root: Path,
     max_attempts: int | None = None,
     dry_run: bool = False,
+    vendor_slug: str = "github",
 ) -> PipelineOutcome:
-    impacts = scan_changes(settings, "github", root)
+    vendor_guidance = _vendor_guidance(settings, vendor_slug)
+    impacts = scan_changes(settings, vendor_slug, root)
     outcome = PipelineOutcome(pr_result=None, impacts=impacts)
     if not impacts:
         return outcome
-    model = build_suggestion_model(settings)
+    model = build_suggestion_model(settings, vendor_slug=vendor_slug)
     max_attempts = max_attempts or settings.fix_max_attempts
     if dry_run:
         contents: dict[Path, str] = {}
@@ -75,6 +86,7 @@ def fix_directory(
                 model,
                 max_attempts=max_attempts,
                 base_url=settings.api_base_url,
+                vendor_guidance=vendor_guidance,
             )
             outcome.steps.append(
                 {
@@ -90,7 +102,13 @@ def fix_directory(
                 contents[path] = patched
         return outcome
     with chdir(root):
-        results = run_fix(impacts, model, max_attempts, base_url=settings.api_base_url)
+        results = run_fix(
+            impacts,
+            model,
+            max_attempts,
+            base_url=settings.api_base_url,
+            vendor_guidance=vendor_guidance,
+        )
     outcome.steps = results
     return outcome
 
@@ -108,7 +126,9 @@ def run_repo_pipeline(
     merge: bool = False,
     pr_body_summary: str | None = None,
     pr_body_details: list[str] | None = None,
+    vendor_slug: str = "github",
 ) -> PipelineOutcome:
+    vendor_guidance = _vendor_guidance(settings, vendor_slug)
     client = GitHubClient(token=settings.github_token)
     info = client.get_repo_info(owner, repo)
     if info is None:
@@ -123,7 +143,7 @@ def run_repo_pipeline(
             root.mkdir(parents=True)
             _extract_tarball(client.repo_tarball(owner, repo, base), root)
 
-        impacts = scan_changes(settings, "github", root)
+        impacts = scan_changes(settings, vendor_slug, root)
         outcome = PipelineOutcome(pr_result=None, impacts=impacts)
         if not impacts:
             return outcome
@@ -141,7 +161,7 @@ def run_repo_pipeline(
         if client.get_ref(owner, repo, branch) is not None:
             client.delete_branch(owner, repo, branch)
 
-        model = build_suggestion_model(settings)
+        model = build_suggestion_model(settings, vendor_slug=vendor_slug)
         body = build_pr_body(
             pr_body_summary
             or f"Argus found {len(impacts)} breaking API change(s) in this repo.",
@@ -162,6 +182,7 @@ def run_repo_pipeline(
             check_interval=15.0,
             base_url=settings.api_base_url,
             body=body,
+            vendor_guidance=vendor_guidance,
         )
         outcome.pr_result = result
         if result.passed and merge:

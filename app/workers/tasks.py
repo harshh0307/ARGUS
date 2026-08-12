@@ -36,6 +36,7 @@ def scan_and_fix(repository_id: int, merge: bool = True) -> dict:
         if repo is None:
             return {"repository_id": repository_id, "error": "repo row not found"}
         owner, name = repo.owner, repo.name
+        vendor_slug = repo.vendor_slug
     finally:
         session.close()
 
@@ -45,6 +46,7 @@ def scan_and_fix(repository_id: int, merge: bool = True) -> dict:
         name,
         branch="argus/fix",
         merge=merge,
+        vendor_slug=vendor_slug,
     )
     result = outcome.pr_result
     return {
@@ -61,11 +63,16 @@ def scan_and_fix(repository_id: int, merge: bool = True) -> dict:
     }
 
 
-def register_repository(owner: str, name: str, default_branch: str | None = None) -> int:
+def register_repository(
+    owner: str,
+    name: str,
+    default_branch: str | None = None,
+    vendor_slug: str = "github",
+) -> int:
     settings = get_settings()
     session = open_session(settings)
     try:
-        repo = upsert_repository(session, owner, name, default_branch)
+        repo = upsert_repository(session, owner, name, default_branch, vendor_slug)
         session.commit()
         return repo.id
     finally:

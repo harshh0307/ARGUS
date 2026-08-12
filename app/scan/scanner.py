@@ -7,6 +7,23 @@ from app.scan.models import Usage
 
 HTTP_METHODS = ("get", "post", "put", "patch", "delete", "head", "options")
 
+JS_SUFFIXES = (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx")
+
+
+def extract_path(url: str, base_url: str) -> str | None:
+    """Turn a request URL into a spec path ('' base URL prefix removed)."""
+    if url.startswith(base_url):
+        path = url[len(base_url):]
+    elif url.startswith("/"):
+        path = url
+    else:
+        return None
+    return path if path.startswith("/") else None
+
+
+def language_for_file(path: str) -> str:
+    return "js" if Path(path).suffix.lower() in JS_SUFFIXES else "py"
+
 
 class ApiScanner:
     def __init__(self, base_url: str, ignore_dirs: set[str] | None = None):
@@ -16,14 +33,22 @@ class ApiScanner:
     def scan(self, root: str | Path) -> list[Usage]:
         usages: list[Usage] = []
         root_path = Path(root)
-        for path in root_path.rglob("*.py"):
-            if self._ignored(path):
+        for path in root_path.rglob("*"):
+            if path.is_dir() or self._ignored(path):
+                continue
+            suffix = path.suffix.lower()
+            if suffix != ".py" and suffix not in JS_SUFFIXES:
                 continue
             rel = path.relative_to(root_path).as_posix()
             usages.extend(self._scan_file(path, rel))
         return sorted(usages, key=lambda u: (u.file, u.line, u.method, u.path))
 
-    def scan_source(self, source: str, filename: str = "<string>") -> list[Usage]:
+    def scan_source(self, source: str, filename: str = "<string>", language: str | None = None) -> list[Usage]:
+        language = language or language_for_file(filename)
+        if language == "js":
+            from app.scan.js_scanner import JsScanner
+
+            return JsScanner(base_url=self.base_url).scan_source(source, filename)
         try:
             tree = ast.parse(source, filename=filename)
         except SyntaxError:
@@ -73,7 +98,7 @@ class _CallVisitor(ast.NodeVisitor):
         if method and node.args:
             url = self._evaluate_url(node.args[0])
             if url is not None:
-                path = self._extract_path(url)
+                path = extract_path(url, self.base_url)
                 if path is not None:
                     self.usages.append(Usage(self.file, node.lineno, method, path))
         self.generic_visit(node)
@@ -100,12 +125,3 @@ class _CallVisitor(ast.NodeVisitor):
                     return None
             return "".join(parts)
         return None
-
-    def _extract_path(self, url: str) -> str | None:
-        if url.startswith(self.base_url):
-            path = url[len(self.base_url):]
-        elif url.startswith("/"):
-            path = url
-        else:
-            return None
-        return path if path.startswith("/") else None

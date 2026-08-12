@@ -59,7 +59,36 @@ class Repository(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     owner: Mapped[str] = mapped_column(String(128))
     name: Mapped[str] = mapped_column(String(128))
+    vendor_slug: Mapped[str] = mapped_column(String(64), default="github")
     default_branch: Mapped[str | None] = mapped_column(String(128), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AppInstallation(Base):
+    __tablename__ = "app_installations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    install_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    owner: Mapped[str] = mapped_column(String(128), index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ChangelogEntry(Base):
+    __tablename__ = "changelog_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    vendor_slug: Mapped[str] = mapped_column(
+        String(64), ForeignKey("vendors.slug"), index=True
+    )
+    run_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("detection_runs.id"), nullable=True, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(16))
+    path: Mapped[str] = mapped_column(Text)
+    method: Mapped[str] = mapped_column(String(64))
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    embedding: Mapped[list | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

@@ -44,12 +44,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("fix", help="generate and apply LLM fixes for impacted call sites")
     p.add_argument("dir", nargs="?", default=".", help="repo directory to fix (default: .)")
+    p.add_argument("--vendor", default="github", help="vendor slug (default: github)")
     p.add_argument("--dry-run", action="store_true", help="print diffs without writing files")
     p.add_argument("--max-attempts", type=int, default=None, help="fix attempts per call site")
     p.set_defaults(func=cmd_fix)
 
     p = sub.add_parser("pr", help="detect, scan, fix and open a self-healing PR")
     p.add_argument("repo", help="target repo as OWNER/REPO")
+    p.add_argument("--vendor", default="github", help="vendor slug (default: github)")
     p.add_argument("--dir", default=None, help="local checkout to scan (default: API tarball)")
     p.add_argument("--base", default=None, help="base branch (default: repo default branch)")
     p.add_argument("--branch", default="argus/fix", help="fix branch to create")
@@ -122,7 +124,11 @@ def cmd_fix(args) -> int:
     root = Path(args.dir)
     try:
         outcome = fix_directory(
-            settings, root, max_attempts=args.max_attempts, dry_run=args.dry_run
+            settings,
+            root,
+            max_attempts=args.max_attempts,
+            dry_run=args.dry_run,
+            vendor_slug=getattr(args, "vendor", "github"),
         )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -175,6 +181,7 @@ def cmd_pr(args) -> int:
             max_attempts=args.max_attempts,
             check_timeout=args.check_timeout,
             merge=args.merge,
+            vendor_slug=getattr(args, "vendor", "github"),
         )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)

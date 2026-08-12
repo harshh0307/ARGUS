@@ -7,8 +7,16 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.db.engine import init_db, session_factory
-from app.db.models import DetectionRun, Repository, SpecSnapshot, Vendor
+from app.db.models import (
+    AppInstallation,
+    ChangelogEntry,
+    DetectionRun,
+    Repository,
+    SpecSnapshot,
+    Vendor,
+)
 from app.registry.vendors import Vendor as VendorSpec
+from app.search.embeddings import build_embedder, cosine_similarity, embed_text
 
 DEFAULT_ENGINE = None
 
@@ -97,6 +105,15 @@ def persist_detection(settings: Settings, vendor_slug: str, result: dict, spec: 
         if result.get("new_digest"):
             record_snapshot(session, vendor_slug, result["new_digest"])
         run = record_detection_run(session, vendor_slug, result)
+        session.flush()
+        embedder = build_embedder(settings)
+        record_changelog_entries(
+            session,
+            vendor_slug,
+            run,
+            run.changes,
+            embedder=embedder,
+        )
         session.commit()
         return run
     except Exception:
@@ -106,17 +123,26 @@ def persist_detection(settings: Settings, vendor_slug: str, result: dict, spec: 
         session.close()
 
 
-def upsert_repository(session: Session, owner: str, name: str, default_branch: str | None = None) -> Repository:
+def upsert_repository(
+    session: Session,
+    owner: str,
+    name: str,
+    default_branch: str | None = None,
+    vendor_slug: str = "github",
+) -> Repository:
     row = session.execute(
         select(Repository).where(
             Repository.owner == owner, Repository.name == name
         )
     ).scalar_one_or_none()
     if row is None:
-        row = Repository(owner=owner, name=name, default_branch=default_branch)
+        row = Repository(
+            owner=owner, name=name, default_branch=default_branch, vendor_slug=vendor_slug
+        )
         session.add(row)
     else:
         row.default_branch = default_branch or row.default_branch
+        row.vendor_slug = vendor_slug or row.vendor_slug
     return row
 
 
@@ -130,3 +156,83 @@ def list_active_repositories(session: Session) -> list[Repository]:
 
 def touch_repository(session: Session, repo: Repository) -> None:
     repo.last_run_at = datetime.now(UTC)
+
+
+def upsert_app_installation(
+    session: Session, install_id: int, owner: str, is_active: bool = True
+) -> AppInstallation:
+    row = session.execute(
+        select(AppInstallation).where(AppInstallation.install_id == install_id)
+    ).scalar_one_or_none()
+    if row is None:
+        row = AppInstallation(install_id=install_id, owner=owner, is_active=is_active)
+        session.add(row)
+    else:
+        row.owner = owner
+        row.is_active = is_active
+    return row
+
+
+def list_installations(session: Session) -> list[AppInstallation]:
+    return list(session.execute(select(AppInstallation)).scalars())
+
+
+def record_changelog_entries(
+    session: Session,
+    vendor_slug: str,
+    run: DetectionRun,
+    changes: list,
+    embedder=None,
+) -> list[ChangelogEntry]:
+    texts = [
+        embed_text(c.get("kind", "change"), c.get("path", ""), c.get("method", ""), c.get("detail"))
+        for c in changes
+    ]
+    vectors = embedder(texts) if embedder is not None and texts else None
+    rows: list[ChangelogEntry] = []
+    for index, c in enumerate(changes):
+        rows.append(
+            ChangelogEntry(
+                vendor_slug=vendor_slug,
+                run_id=run.id,
+                kind=c.get("kind", "change"),
+                path=c.get("path", ""),
+                method=c.get("method", ""),
+                detail=c.get("detail"),
+                embedding=vectors[index] if vectors is not None else None,
+            )
+        )
+    session.add_all(rows)
+    return rows
+
+
+def search_changelog(
+    session: Session,
+    query: str,
+    vendor_slug: str | None = None,
+    limit: int = 10,
+    embedder=None,
+) -> list[tuple[ChangelogEntry, float]]:
+    statement = select(ChangelogEntry)
+    if vendor_slug:
+        statement = statement.where(ChangelogEntry.vendor_slug == vendor_slug)
+    rows = list(session.execute(statement).scalars())
+    if not rows:
+        return []
+
+    qvec = embedder([query])[0] if embedder is not None else None
+    if qvec:
+        scored = [
+            (row, cosine_similarity(qvec, row.embedding)) for row in rows if row.embedding
+        ]
+        if scored:
+            return sorted(scored, key=lambda item: item[1], reverse=True)[:limit]
+
+    terms = [t for t in query.lower().split() if t]
+    scored = []
+    for row in rows:
+        haystack = " ".join([row.kind, row.path, row.method, row.detail or ""]).lower()
+        score = sum(1 for t in terms if t in haystack)
+        if score > 0:
+            scored.append((row, float(score)))
+    return sorted(scored, key=lambda item: item[1], reverse=True)[:limit]

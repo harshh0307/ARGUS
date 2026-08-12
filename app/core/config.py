@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     llm_model: str = "gpt-4o-mini"
     llm_base_url: str | None = None
     fix_max_attempts: int = 3
+    embedding_api_key: str | None = None
+    embedding_base_url: str | None = None
+    embedding_model: str = "text-embedding-3-small"
+    search_limit: int = 10
 
 
 @lru_cache
