@@ -194,9 +194,46 @@ docker compose up api         # FastAPI on :8000 (with postgres + redis)
 ## Roadmap
 
 - **Phase 1 (MVP):** detection ✅, scanning ✅, fix agent ✅, semantic guard ✅, PR + CI self-heal ✅, merge-on-green ✅, CLI + docker-compose ✅, live demo ✅
-- **Phase 2 (in progress):** vendor registry ✅, Postgres persistence ✅, pipeline service layer ✅, Celery workers + Redis ✅, GitHub App OAuth + webhooks ✅, FastAPI read API ✅
+- **Phase 2:** vendor registry ✅, Postgres persistence ✅, pipeline service layer ✅, Celery workers + Redis ✅, GitHub App OAuth + webhooks ✅, FastAPI read API ✅
 - **Phase 3:** AWS deployment — ECS Fargate, RDS, ElastiCache, S3, Terraform, GitHub Actions CI/CD
-- **Phase 4:** JS/TS scanning, per-vendor agents, real-time webhooks, pgvector changelog search
+- **Phase 4:** JS/TS scanning ✅, per-vendor agents ✅, real-time webhooks ✅, pgvector changelog search ✅
+
+## AWS deployment (Phase 3)
+
+Infrastructure lives in `infra/terraform` and deploys: VPC (2 AZs, public/private subnets, NAT), RDS Postgres 16 (pgvector-compatible), ElastiCache Redis 7, S3 snapshot bucket, ECR repo, ECS Fargate cluster with `api` (behind an ALB), `worker`, and `beat` services, plus IAM roles and CloudWatch logging.
+
+### One-time prerequisites
+
+1. **State bucket** — create an S3 bucket + DynamoDB lock table for Terraform state.
+2. **AWS credentials** — configure locally via `aws configure` (or `AWS_PROFILE`).
+3. **Secrets** — upload your `.env` secrets to SSM Parameter Store:
+
+   ```powershell
+   .\scripts\aws\upload-secrets.ps1 -Region us-east-1 -Prefix /argus -EnvFile .env
+   ```
+
+### Deploy
+
+```powershell
+terraform -chdir=infra/terraform init `
+  -backend-config="bucket=<tf-state-bucket>" `
+  -backend-config="key=argus/terraform.tfstate" `
+  -backend-config="region=us-east-1"
+terraform -chdir=infra/terraform apply
+
+# build & push the image (or let GitHub Actions do it)
+docker build -t <account>.dkr.ecr.us-east-1.amazonaws.com/argus-dev:<tag> .
+docker push <account>.dkr.ecr.us-east-1.amazonaws.com/argus-dev:<tag>
+```
+
+The API is reachable at the ALB DNS name (from `terraform output alb_url`); health check: `GET /health`.
+
+### CI/CD
+
+- `.github/workflows/ci.yml` — ruff + pytest + `terraform validate` on every push/PR
+- `.github/workflows/deploy.yml` — on push to `main`: test, build/push image to ECR, `terraform apply`, force new ECS deployments
+
+Required GitHub secrets: `AWS_DEPLOY_ROLE_ARN` (OIDC role to assume), `TF_STATE_BUCKET`.
 
 ## Known MVP limits
 
