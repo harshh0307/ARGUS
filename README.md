@@ -36,17 +36,20 @@ repo clone ─▶ AST usage scan ─▶ impact report ┤
 | Celery workers + Redis | ✅ | Celery 5.6, Redis broker/backend, beat polling, `scan_and_fix` tasks |
 | GitHub App auth (auto-refreshing install tokens) | ✅ | RS256 app JWT → installation access tokens, cached; PAT fallback |
 | FastAPI read API + webhook receiver | ✅ | read-only dashboards, HMAC-verified GitHub webhooks |
+| Real-time webhooks | ✅ | `push`, `installation`, `repository_dispatch` events → Celery dispatch (inline fallback) |
 | Semantic diff engine (breaking-change rules) | ✅ | normalized OpenAPI comparison |
-| AST usage scanner + impact report | ✅ | Python `ast`, constant folding, template path matching |
+| AST usage scanner + impact report | ✅ | Python `ast` + JS/TS scanner (fetch/axios), constant folding, template path matching |
 | LangGraph fix agent (validate + retry) | ✅ | LangGraph, OpenAI-compatible LLMs |
+| Per-vendor fix agents | ✅ | vendor-specific guidance + model per vendor (`--vendor`) |
 | Semantic guard (no-op patch rejection) | ✅ | re-scans patched AST, rejects if removed endpoint still called |
 | Multi-provider LLM + quota fallback | ✅ | Gemini / OpenAI primary, Nemotron free fallback on 429 |
 | Merge-on-green (`--merge` flag) | ✅ | squash-merge when CI passes, branch cleanup |
 | GitHub PR client + CI feedback loop | ✅ | httpx (REST API), Actions job logs |
+| Changelog + semantic search | ✅ | embeddings (OpenAI-compatible) + pgvector-capable Postgres, `/api/v1/search/changelog` |
 | CLI + docker-compose | ✅ | argparse, Docker |
 | Full end-to-end demo (PR self-heal) | ✅ | `scripts/demo_pr.py` (verified live) |
 | Multi-vendor registry, workers, Postgres, API | ✅ | Celery + Redis, PostgreSQL, FastAPI |
-| AWS cloud deployment | Phase 3 | ECS Fargate, RDS, Terraform |
+| AWS cloud deployment | ✅ | ECS Fargate, RDS, ElastiCache, Terraform, GitHub Actions CI/CD |
 
 ## Project layout
 
@@ -55,18 +58,22 @@ app/
 ├── core/          # settings (pydantic-settings, 12-factor config)
 ├── ingestion/     # fetch specs, snapshot versioning
 ├── detection/     # normalize + semantic diff + breaking-change rules
-├── scan/          # AST scanner, impact assessment
+├── scan/          # Python ast + JS/TS scanner, impact assessment
 ├── fix/           # LangGraph fix agent, patch engine, multi-provider LLM
 ├── github/        # GitHub client, App token auth, CI logs, PR self-heal loop
 ├── registry/      # vendor registry (github, stripe, twilio)
 ├── db/            # SQLAlchemy models + persistence layer
 ├── services/      # pipeline service layer (shared by CLI, workers, API)
+├── search/        # changelog embeddings + cosine search
 ├── workers/       # Celery app + tasks
 ├── api/           # FastAPI read API + webhook receiver
 └── cli.py         # argus detect/scan/fix/pr commands
+infra/terraform/   # AWS IaC (VPC, RDS, ElastiCache, ECS Fargate, ALB)
+.github/workflows/ # CI (tests+lint) + deploy (ECR → terraform → ECS)
 scripts/
-└── demo_pr.py     # full live pipeline demo (seed repo -> PR -> CI loop)
-tests/             # pytest suite (133 tests)
+├── demo_pr.py     # full live pipeline demo (seed repo -> PR -> CI loop)
+└── aws/           # upload-secrets.ps1 (SSM Parameter Store)
+tests/             # pytest suite (170 tests)
 ```
 
 ## Setup
@@ -94,6 +101,7 @@ Copy-Item .env.example .env
 | `OPENROUTER_API_KEY` | fallback when primary LLM is rate-limited | free model: `nvidia/nemotron-3-ultra-550b-a55b:free` (verified) |
 | `OPENROUTER_MODEL` | — | default `nvidia/nemotron-3-ultra-550b-a55b:free` |
 | `LLM_MODEL` | — | default `gpt-4o-mini` |
+| `EMBEDDING_API_KEY` / `EMBEDDING_BASE_URL` / `EMBEDDING_MODEL` | semantic changelog search | OpenAI-compatible embeddings endpoint (default `text-embedding-3-small`); keyword fallback without it |
 | `DATABASE_URL` | `argus detect` persistence, API read endpoints | optional; `sqlite:///data/argus.db` or `postgresql+psycopg://...` (docker-compose has Postgres 16) |
 
 ## Usage
@@ -102,7 +110,10 @@ Copy-Item .env.example .env
 argus vendors               # list registered spec vendors (github, stripe, twilio)
 argus detect                # diff pinned old spec vs. current -> breaking/additive changes
 argus detect --vendor stripe  # run detection for another vendor
-argus scan [DIR]            # scan a repo for call sites hit by breaking changes
+argus scan [DIR]            # scan a repo (Python + JS/TS) for call sites hit by breaking changes
+argus fix [DIR] --vendor github  # apply LLM fixes in place (--dry-run to preview diffs)
+argus pr OWNER/REPO --vendor github  # full loop: detect, scan, fix, open PR, self-heal on CI failure
+argus pr OWNER/REPO --merge  # same, but squash-merge when CI passes
 ```
 
 ### Celery workers (Phase 2)
@@ -132,9 +143,10 @@ uvicorn app.api.main:app --host 0.0.0.0 --port 8000
 | `GET /health` | liveness + database flag |
 | `GET /api/v1/vendors` / `/api/v1/vendors/{slug}` | vendor registry |
 | `GET /api/v1/detection-runs` / `.../{run_id}` | detection history from Postgres |
-| `GET /api/v1/repositories` | registered repos |
-| `POST /api/v1/repositories` | register a repo (`{owner, name, default_branch}`) |
-| `POST /api/v1/webhook` | GitHub webhook receiver (`X-GitHub-Events: push`); HMAC-verified (needs `WEBHOOK_SECRET`), dispatches `scan_and_fix` for registered repos (falls back to inline runs when Redis is down) |
+| `GET /api/v1/repositories` / `POST /api/v1/repositories` | register/list repos (`{owner, name, default_branch, vendor_slug}`) |
+| `GET /api/v1/installations` | GitHub App installations (owner, active state) recorded from webhooks |
+| `GET /api/v1/search/changelog?q=...&vendor=...&limit=...` | semantic search across detected changes (embeddings, keyword fallback) |
+| `POST /api/v1/webhook` | GitHub webhook receiver; HMAC-verified (needs `WEBHOOK_SECRET`). Events: `push` and `repository_dispatch` → `scan_and_fix` for registered repos; `installation` → upserts install rows (active on created/suspend, inactive on deleted/unsuspended). Dispatches via Celery with an inline-thread fallback when Redis is down |
 
 Point `https://your.host/webhook` at the repo's GitHub webhook with content type `application/json` and a secret matching `WEBHOOK_SECRET`.
 
@@ -181,8 +193,8 @@ docker compose up api         # FastAPI on :8000 (with postgres + redis)
 
 1. **Ingestion** — fetch the vendor's OpenAPI spec with retries/backoff and ETag caching; store each version content-addressed (filename = SHA-256 digest), so history is immutable and deduplicated.
 2. **Detection** — normalize both specs (strip descriptions, sort, keep only semantics), then apply rules: endpoint removed, parameter removed/required/type-changed, response code removed = `breaking`; new endpoints = `additive`.
-3. **Impact** — parse each Python file with `ast`, resolve f-string URLs via constant folding (`BASE = "https://api.github.com"`), match call sites against spec path templates (`/repos/{owner}/{repo}`), and join with breaking changes.
-4. **Fix agent** — a LangGraph agent reads the impact report, proposes a patch, applies it, validates Python syntax, and retries up to `FIX_MAX_ATTEMPTS` times. The LLM is any OpenAI-compatible endpoint (Gemini, OpenAI, OpenRouter) with a free-tier fallback on 429 rate limits.
+3. **Impact** — scan each file: `ast` for Python; a dedicated tokenizer for JS/TS (`fetch()`, `axios.get/post`, `axios({method, url})`, template literals, module-level URL constants). Resolve f-string/template URLs via constant folding (`BASE = "https://api.github.com"`), match call sites against spec path templates (`/repos/{owner}/{repo}`), and join with breaking changes.
+4. **Fix agent** — a LangGraph agent reads the impact report, proposes a patch, applies it, validates syntax (Python or JS depending on file), and retries up to `FIX_MAX_ATTEMPTS` times. Vendors may supply their own fix guidance and preferred model. The LLM is any OpenAI-compatible endpoint (Gemini, OpenAI, OpenRouter) with a free-tier fallback on 429 rate limits.
 5. **Semantic guard** — after syntax validation, the agent re-scans the patched content with the AST scanner. If the removed endpoint is still called, the patch is rejected and the agent retries with the error as context. This prevents no-op patches (LLM echoing the original line) from being pushed.
 6. **PR + CI self-heal** — Argus pushes the fixed files to a branch, opens a PR, and polls the check runs. On failure it extracts the error window from the Actions job log (`##[error]`/`Traceback`), posts it as a PR comment, and re-runs the agent with the error as context — until CI is green or attempts run out.
 7. **Merge-on-green** — with `--merge`, Argus squash-merges the PR when CI passes and deletes the fix branch. If merge is rejected (e.g., branch protection), it warns and leaves the PR open.
@@ -195,7 +207,7 @@ docker compose up api         # FastAPI on :8000 (with postgres + redis)
 
 - **Phase 1 (MVP):** detection ✅, scanning ✅, fix agent ✅, semantic guard ✅, PR + CI self-heal ✅, merge-on-green ✅, CLI + docker-compose ✅, live demo ✅
 - **Phase 2:** vendor registry ✅, Postgres persistence ✅, pipeline service layer ✅, Celery workers + Redis ✅, GitHub App OAuth + webhooks ✅, FastAPI read API ✅
-- **Phase 3:** AWS deployment — ECS Fargate, RDS, ElastiCache, S3, Terraform, GitHub Actions CI/CD
+- **Phase 3:** AWS deployment — ECS Fargate, RDS, ElastiCache, S3, Terraform, GitHub Actions CI/CD ✅ (IaC validated; apply requires an AWS account)
 - **Phase 4:** JS/TS scanning ✅, per-vendor agents ✅, real-time webhooks ✅, pgvector changelog search ✅
 
 ## AWS deployment (Phase 3)
@@ -237,7 +249,9 @@ Required GitHub secrets: `AWS_DEPLOY_ROLE_ARN` (OIDC role to assume), `TF_STATE_
 
 ## Known MVP limits
 
-- Scans `requests`/`httpx` style HTTP calls; `requests.request("GET", ...)` style and async clients not yet supported
+- Python scanning covers `requests`/`httpx` style calls; `requests.request("GET", ...)` style and async clients not yet supported. JS/TS covers `fetch`/`axios` idioms only
 - Response-body usage analysis not yet supported
 - GitHub App private key must be kept secret; classic PATs work as a simpler fallback
 - Free-tier LLMs may produce no-op patches; the semantic guard catches these but adds latency (paid models fix this entirely)
+- Semantic search falls back to keyword matching when `EMBEDDING_API_KEY` is not configured
+- Phase 3 Terraform is validated but not yet applied to a live AWS account

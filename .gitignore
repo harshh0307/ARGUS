@@ -8,3 +8,6 @@ data/
 .ruff_cache/
 dist/
 *.egg-info/
+infra/terraform/.terraform/
+*.tfstate
+*.tfstate.backup
