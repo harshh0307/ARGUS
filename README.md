@@ -101,7 +101,7 @@ Copy-Item .env.example .env
 | `OPENROUTER_API_KEY` | fallback when primary LLM is rate-limited | free model: `nvidia/nemotron-3-ultra-550b-a55b:free` (verified) |
 | `OPENROUTER_MODEL` | — | default `nvidia/nemotron-3-ultra-550b-a55b:free` |
 | `LLM_MODEL` | — | default `gpt-4o-mini` |
-| `EMBEDDING_API_KEY` / `EMBEDDING_BASE_URL` / `EMBEDDING_MODEL` | semantic changelog search | OpenAI-compatible embeddings endpoint (default `text-embedding-3-small`); keyword fallback without it |
+| `EMBEDDING_API_KEY` / `EMBEDDING_BASE_URL` / `EMBEDDING_MODEL` | semantic changelog search | OpenAI-compatible embeddings endpoint (default `text-embedding-3-small`); keyword fallback without it. **Tip:** your OpenRouter key works — set `EMBEDDING_BASE_URL=https://openrouter.ai/api/v1` + `EMBEDDING_MODEL=openai/text-embedding-3-small` (free, verified) |
 | `DATABASE_URL` | `argus detect` persistence, API read endpoints | optional; `sqlite:///data/argus.db` or `postgresql+psycopg://...` (docker-compose has Postgres 16) |
 
 ## Usage
@@ -145,7 +145,7 @@ uvicorn app.api.main:app --host 0.0.0.0 --port 8000
 | `GET /api/v1/detection-runs` / `.../{run_id}` | detection history from Postgres |
 | `GET /api/v1/repositories` / `POST /api/v1/repositories` | register/list repos (`{owner, name, default_branch, vendor_slug}`) |
 | `GET /api/v1/installations` | GitHub App installations (owner, active state) recorded from webhooks |
-| `GET /api/v1/search/changelog?q=...&vendor=...&limit=...` | semantic search across detected changes (embeddings, keyword fallback) |
+| `GET /api/v1/search/changelog?q=...&vendor=...&limit=...` | semantic search across detected changes (embeddings via `EMBEDDING_*`, keyword fallback; every `argus detect` batch-embeds new changes) |
 | `POST /api/v1/webhook` | GitHub webhook receiver; HMAC-verified (needs `WEBHOOK_SECRET`). Events: `push` and `repository_dispatch` → `scan_and_fix` for registered repos; `installation` → upserts install rows (active on created/suspend, inactive on deleted/unsuspended). Dispatches via Celery with an inline-thread fallback when Redis is down |
 
 Point `https://your.host/webhook` at the repo's GitHub webhook with content type `application/json` and a secret matching `WEBHOOK_SECRET`.
@@ -169,6 +169,9 @@ argus pr acme/website --branch argus/fix --max-attempts 3
 
 argus pr acme/website --merge      # squash-merge when CI passes
 # merged; fix branch deleted
+
+curl "http://127.0.0.1:8000/api/v1/search/changelog?q=manage%20dependabot%20access"
+# semantic hits ranked by cosine similarity (needs EMBEDDING_* set)
 ```
 
 `argus pr` fetches the repo as a tarball through the GitHub API (no local git checkout needed; use `--dir` to scan a local checkout instead).
