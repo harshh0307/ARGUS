@@ -2,6 +2,11 @@
 
 **The changelog that reads your codebase.**
 
+[![CI](https://github.com/harshh0307/ARGUS/actions/workflows/ci.yml/badge.svg)](https://github.com/harshh0307/ARGUS/actions/workflows/ci.yml)
+[![Deploy](https://github.com/harshh0307/ARGUS/actions/workflows/deploy.yml/badge.svg)](https://github.com/harshh0307/ARGUS/actions/workflows/deploy.yml)
+[![Python 3.14](https://img.shields.io/badge/python-3.14-blue)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 Argus watches API vendors (Stripe, Twilio, GitHub...) by diffing their OpenAPI specs, scans your repositories for affected call sites, fixes them with an LLM agent, and opens a self-healing pull request.
 
 > "API providers shouldn't just announce changes; they should apply them."
@@ -206,6 +211,15 @@ docker compose up api         # FastAPI on :8000 (with postgres + redis)
 
 `scripts/demo_pr.py` runs the whole pipeline live: creates a seed repo calling removed GitHub endpoints, detects the breaking changes, scans, fixes, opens a PR, and self-heals from CI feedback (verified live: CI failures are fed back to the fix agent, semantic guard rejects no-op patches, and retries push real fixes).
 
+`scripts/demo_search.py` seeds the changelog with 8 sample GitHub changes and lets you try the semantic search without a full live detection:
+
+```powershell
+python scripts/demo_search.py --db sqlite:///data/argus.db
+uvicorn app.api.main:app
+curl "http://127.0.0.1:8000/api/v1/search/changelog?q=transfer%20repository"
+# 0.648 post /repos/{owner}/{repo}/transfer
+```
+
 ## Roadmap
 
 - **Phase 1 (MVP):** detection ✅, scanning ✅, fix agent ✅, semantic guard ✅, PR + CI self-heal ✅, merge-on-green ✅, CLI + docker-compose ✅, live demo ✅
@@ -218,6 +232,14 @@ docker compose up api         # FastAPI on :8000 (with postgres + redis)
 Infrastructure lives in `infra/terraform` and deploys: VPC (2 AZs, public/private subnets, NAT), RDS Postgres 16 (pgvector-compatible), ElastiCache Redis 7, S3 snapshot bucket, ECR repo, ECS Fargate cluster with `api` (behind an ALB), `worker`, and `beat` services, plus IAM roles and CloudWatch logging.
 
 ### One-time prerequisites
+
+Run the bootstrap script — it creates the state bucket, DynamoDB lock table, GitHub OIDC provider + deploy role, attaches permissions, and uploads your `.env` secrets to SSM:
+
+```powershell
+.\scripts\aws\bootstrap.ps1 -Region us-east-1 -Environment dev -GitHubRepo your/ARGUS
+```
+
+It prints the two GitHub secrets to add (`AWS_DEPLOY_ROLE_ARN`, `TF_STATE_BUCKET`). If you'd rather do it manually:
 
 1. **State bucket** — create an S3 bucket + DynamoDB lock table for Terraform state.
 2. **AWS credentials** — configure locally via `aws configure` (or `AWS_PROFILE`).

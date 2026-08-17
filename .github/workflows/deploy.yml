@@ -19,7 +19,7 @@ env:
   IMAGE_TAG: ${{ github.sha }}
 
 jobs:
-  deploy:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,6 +35,18 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: pytest -q
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Check AWS secrets configured
+        if: ${{ secrets.AWS_DEPLOY_ROLE_ARN == '' || secrets.TF_STATE_BUCKET == '' }}
+        run: |
+          echo "::error::AWS deployment cannot run: set AWS_DEPLOY_ROLE_ARN and TF_STATE_BUCKET secrets (run scripts/aws/bootstrap.ps1 to create them)."
+          exit 1
+
+      - uses: actions/checkout@v4
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
