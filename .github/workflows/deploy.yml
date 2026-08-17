@@ -70,9 +70,9 @@ jobs:
           echo "image=$REGISTRY/$ECR_REPO:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: "1.9.8"
+        run: |
+          curl -fsSL -o /tmp/tf.zip https://releases.hashicorp.com/terraform/1.9.8/terraform_1.9.8_linux_amd64.zip
+          sudo unzip -o /tmp/tf.zip -d /usr/local/bin
 
       - name: Terraform apply
         working-directory: infra/terraform
