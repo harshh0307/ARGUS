@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from sqlalchemy import Engine, create_engine
+from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 from app.core.config import Settings
@@ -23,7 +23,19 @@ def get_engine(url: str) -> Engine:
 
 def init_db(engine: Engine | None = None) -> None:
     engine = engine or get_engine(_database_url())
-    Base.metadata.create_all(engine)
+    _create_all_locked(engine)
+
+
+def _create_all_locked(engine: Engine) -> None:
+    if engine.url.get_backend_name() == "postgresql":
+        with engine.begin() as conn:
+            conn.execute(text("SELECT pg_advisory_lock(724_201_01)"))
+            try:
+                Base.metadata.create_all(engine)
+            finally:
+                conn.execute(text("SELECT pg_advisory_unlock(724_201_01)"))
+    else:
+        Base.metadata.create_all(engine)
 
 
 def session_factory(engine: Engine | None = None):

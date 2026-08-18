@@ -37,6 +37,7 @@ services:
     build: .
     image: argus:local
     entrypoint: ["celery", "-A", "app.workers.celery_app"]
+    working_dir: /tmp
     env_file: .env
     depends_on:
       - postgres
