@@ -292,7 +292,7 @@ The API is reachable at the ALB DNS name (from `terraform output alb_url`); heal
 ### CI/CD
 
 - `.github/workflows/ci.yml` — ruff + pytest + `terraform validate` on every push/PR
-- `.github/workflows/deploy.yml` — on push to `main`: test, build/push image to ECR, `terraform apply`, force new ECS deployments
+- `.github/workflows/deploy.yml` — on push to `main`: test, build/push image to ECR, `terraform apply`, force new ECS deployments. The job is **skipped** (green) until `AWS_DEPLOY_ROLE_ARN` / `TF_STATE_BUCKET` secrets exist — run `scripts/aws/bootstrap.ps1` to create them and enable deployment.
 
 Required GitHub secrets: `AWS_DEPLOY_ROLE_ARN` (OIDC role to assume), `TF_STATE_BUCKET`.
 
