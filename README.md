@@ -229,7 +229,31 @@ curl "http://127.0.0.1:8000/api/v1/search/changelog?q=transfer%20repository"
 
 ## AWS deployment (Phase 3)
 
-Infrastructure lives in `infra/terraform` and deploys: VPC (2 AZs, public/private subnets, NAT), RDS Postgres 16 (pgvector-compatible), ElastiCache Redis 7, S3 snapshot bucket, ECR repo, ECS Fargate cluster with `api` (behind an ALB), `worker`, and `beat` services, plus IAM roles and CloudWatch logging.
+Two deployment options:
+
+- **`infra/terraform/`** — production stack: VPC (2 AZs, NAT), RDS Postgres 16 (pgvector-compatible), ElastiCache Redis 7, S3 snapshot bucket, ECR repo, ECS Fargate cluster with `api` (behind an ALB), `worker`, and `beat` services, plus IAM roles and CloudWatch logging. Costs ~$130-150/month (not free-tier eligible).
+- **`infra/terraform-free/`** — single **EC2 `t4g.micro`** running the whole app via docker-compose. ~$0/month during the free tier (750 hrs/mo t4g.micro + 30GB gp3 + public IPv4 are included). No ALB/NAT/RDS/ElastiCache. This is the recommended option for free-tier accounts.
+
+### Free-tier deployment (`infra/terraform-free/`)
+
+Creates: t4g.micro Ubuntu instance (20GB gp3), SSH key (saved to `keys/`), security group (SSH from your IP + API on 8000), Elastic IP, IAM role with SSM read, and cloud-init that installs Docker, clones the repo, pulls `.env` from SSM, and runs `docker compose up`.
+
+```powershell
+# 1. AWS credentials (one time)
+aws configure          # region: us-east-1, output: json
+
+# 2. Upload secrets to SSM (one time)
+.\scripts\aws\upload-secrets.ps1 -Region us-east-1 -Prefix /argus -EnvFile .env
+
+# 3. Deploy
+terraform -chdir=infra/terraform-free init
+terraform -chdir=infra/terraform-free apply -var="ssh_cidr=<your-ip>/32"
+
+# 4. Wait ~10 min for the container build, then check health
+terraform -chdir=infra/terraform-free output health_url
+```
+
+Update the running app (from the instance): `git pull && docker compose up -d --build api worker beat` — automated in `scripts/aws/ec2-update.sh`.
 
 ### One-time prerequisites
 
