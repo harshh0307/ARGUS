@@ -1,6 +1,5 @@
 ﻿services:
   argus:
-    restart: unless-stopped
     build: .
     image: argus:local
     env_file: .env
