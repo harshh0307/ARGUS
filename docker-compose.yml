@@ -1,5 +1,6 @@
-services:
+﻿services:
   argus:
+    restart: unless-stopped
     build: .
     image: argus:local
     env_file: .env
@@ -8,6 +9,7 @@ services:
     command: ["scan", "/repos"]
 
   postgres:
+    restart: unless-stopped
     image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: argus
@@ -19,11 +21,13 @@ services:
       - pgdata:/var/lib/postgresql/data
 
   redis:
+    restart: unless-stopped
     image: redis:7
     ports:
       - "6379:6379"
 
   worker:
+    restart: unless-stopped
     build: .
     image: argus:local
     entrypoint: ["celery", "-A", "app.workers.celery_app"]
@@ -34,6 +38,7 @@ services:
     command: ["worker", "--loglevel=info"]
 
   beat:
+    restart: unless-stopped
     build: .
     image: argus:local
     entrypoint: ["celery", "-A", "app.workers.celery_app"]
@@ -45,6 +50,7 @@ services:
     command: ["beat", "--loglevel=info"]
 
   api:
+    restart: unless-stopped
     build: .
     image: argus:local
     entrypoint: ["uvicorn", "app.api.main:app"]
