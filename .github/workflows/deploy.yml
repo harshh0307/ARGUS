@@ -39,11 +39,22 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     needs: test
-    if: ${{ secrets.AWS_DEPLOY_ROLE_ARN != '' && secrets.TF_STATE_BUCKET != '' }}
     steps:
+      - name: Check AWS secrets configured
+        run: |
+          if [ -z "$AWS_DEPLOY_ROLE_ARN" ] || [ -z "$TF_STATE_BUCKET" ]; then
+            echo "DEPLOY_ENABLED=false" >> "$GITHUB_ENV"
+            echo "::notice::Skipping AWS deployment: set AWS_DEPLOY_ROLE_ARN and TF_STATE_BUCKET secrets (run scripts/aws/bootstrap.ps1) to enable the production ECS deployment."
+          fi
+        env:
+          AWS_DEPLOY_ROLE_ARN: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+
       - uses: actions/checkout@v4
+        if: ${{ env.DEPLOY_ENABLED != 'false' }}
 
       - name: Assume AWS role via GitHub OIDC
+        if: ${{ env.DEPLOY_ENABLED != 'false' }}
         run: |
           set -euo pipefail
           id_token=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
@@ -61,12 +72,14 @@ jobs:
           AWS_DEPLOY_ROLE_ARN: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
 
       - name: Login to Amazon ECR
+        if: ${{ env.DEPLOY_ENABLED != 'false' }}
         run: |
           registry=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
           aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $registry
           echo "REGISTRY=$registry" >> "$GITHUB_ENV"
 
       - name: Build, tag, and push image
+        if: ${{ env.DEPLOY_ENABLED != 'false' }}
         run: |
           docker build -t $REGISTRY/$ECR_REPO:$IMAGE_TAG .
           docker tag $REGISTRY/$ECR_REPO:$IMAGE_TAG $REGISTRY/$ECR_REPO:latest
@@ -74,11 +87,13 @@ jobs:
           docker push $REGISTRY/$ECR_REPO:latest
 
       - name: Setup Terraform
+        if: ${{ env.DEPLOY_ENABLED != 'false' }}
         run: |
           curl -fsSL -o /tmp/tf.zip https://releases.hashicorp.com/terraform/1.9.8/terraform_1.9.8_linux_amd64.zip
           sudo unzip -o /tmp/tf.zip -d /usr/local/bin
 
       - name: Terraform apply
+        if: ${{ env.DEPLOY_ENABLED != 'false' }}
         working-directory: infra/terraform
         run: |
           terraform init \
@@ -90,6 +105,7 @@ jobs:
           TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
 
       - name: Force new ECS deployment
+        if: ${{ env.DEPLOY_ENABLED != 'false' }}
         run: |
           aws ecs update-service --cluster argus-dev --service argus-dev-api --force-new-deployment
           aws ecs update-service --cluster argus-dev --service argus-dev-worker --force-new-deployment
