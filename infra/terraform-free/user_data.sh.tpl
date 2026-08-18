@@ -8,7 +8,8 @@ export DEBIAN_FRONTEND=noninteractive
 echo "== argus free-tier bootstrap =="
 
 apt-get update -y
-apt-get install -y docker.io docker-compose-v2 awscli git
+apt-get install -y docker.io docker-compose-v2 python3-pip git
+pip3 install --break-system-packages -q awscli
 
 systemctl enable --now docker
 

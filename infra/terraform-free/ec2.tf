@@ -33,6 +33,11 @@ resource "aws_iam_role" "instance" {
   tags = local.tags
 }
 
+resource "aws_iam_role_policy_attachment" "ssm_core" {
+  role       = aws_iam_role.instance.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
 resource "aws_iam_role_policy" "ssm_read" {
   name = "argus-secrets-read"
   role = aws_iam_role.instance.id
