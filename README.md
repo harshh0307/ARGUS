@@ -304,3 +304,4 @@ Required GitHub secrets: `AWS_DEPLOY_ROLE_ARN` (OIDC role to assume), `TF_STATE_
 - Free-tier LLMs may produce no-op patches; the semantic guard catches these but adds latency (paid models fix this entirely)
 - Semantic search falls back to keyword matching when `EMBEDDING_API_KEY` is not configured
 - Phase 3 Terraform is validated but not yet applied to a live AWS account
+- h
