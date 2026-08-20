@@ -58,7 +58,7 @@ class JsScanner:
             if not parts:
                 return None, None
             method = self._options_method(parts[1]) if len(parts) > 1 else "get"
-            return method, self._eval_url(parts[0], constants)
+            return method or "get", self._eval_url(parts[0], constants)
         if name == "axios":
             method = "get"
             url_arg = parts[0] if parts else None
