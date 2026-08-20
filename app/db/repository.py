@@ -220,7 +220,12 @@ def search_changelog(
     if not rows:
         return []
 
-    qvec = embedder([query])[0] if embedder is not None else None
+    qvec = None
+    if embedder is not None:
+        try:
+            qvec = embedder([query])[0]
+        except (TypeError, IndexError, KeyError):
+            qvec = None
     if qvec:
         scored = [
             (row, cosine_similarity(qvec, row.embedding)) for row in rows if row.embedding
