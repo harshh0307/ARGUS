@@ -78,7 +78,7 @@ infra/terraform/   # AWS IaC (VPC, RDS, ElastiCache, ECS Fargate, ALB)
 scripts/
 ├── demo_pr.py     # full live pipeline demo (seed repo -> PR -> CI loop)
 └── aws/           # upload-secrets.ps1 (SSM Parameter Store)
-tests/             # pytest suite (170 tests)
+tests/             # pytest suite (319 tests)
 ```
 
 ## Setup
@@ -132,10 +132,6 @@ celery -A app.workers.celery_app beat --loglevel=info
 ```
 
 Tasks: `argus.poll_all_vendors` (beat-scheduled), `argus.run_detection`, `argus.scan_and_fix`, `argus.register_repository`. Requires `DATABASE_URL` and `REDIS_URL` (docker-compose provides Postgres + Redis).
-argus fix [DIR]              # apply LLM fixes in place (add --dry-run to preview diffs)
-argus pr OWNER/REPO          # full loop: detect, scan, fix, open PR, self-heal on CI failure
-argus pr OWNER/REPO --merge  # same, but squash-merge when CI passes
-```
 
 ### FastAPI (Phase 2)
 
@@ -318,5 +314,4 @@ Required GitHub secrets: `AWS_DEPLOY_ROLE_ARN` (OIDC role to assume), `TF_STATE_
 - GitHub App private key must be kept secret; classic PATs work as a simpler fallback
 - Free-tier LLMs may produce no-op patches; the semantic guard catches these but adds latency (paid models fix this entirely)
 - Semantic search falls back to keyword matching when `EMBEDDING_API_KEY` is not configured
-- Phase 3 Terraform is validated but not yet applied to a live AWS account
-- h
+- Phase 3 AWS free-tier deployment (EC2 t4g.micro + docker-compose) verified live
