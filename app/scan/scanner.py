@@ -9,6 +9,23 @@ HTTP_METHODS = ("get", "post", "put", "patch", "delete", "head", "options")
 
 JS_SUFFIXES = (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx")
 
+CLIENT_CLASS_METHODS = {
+    "client": frozenset(HTTP_METHODS),
+    "AsyncClient": frozenset(HTTP_METHODS),
+    "Session": frozenset(HTTP_METHODS),
+}
+
+CLIENT_OBJECT_PATTERNS = {
+    "requests.Session",
+    "httpx.Client",
+    "httpx.AsyncClient",
+    "aiohttp.ClientSession",
+}
+
+REQUEST_METHOD_CALLS = {
+    "request",
+}
+
 
 def extract_path(url: str, base_url: str) -> str | None:
     """Turn a request URL into a spec path ('' base URL prefix removed)."""
@@ -94,6 +111,21 @@ class _CallVisitor(ast.NodeVisitor):
         self.usages: list[Usage] = []
 
     def visit_Call(self, node: ast.Call) -> None:
+        # requests.request("GET", url) - method in first arg, URL in second
+        if (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr in REQUEST_METHOD_CALLS
+            and len(node.args) >= 2
+        ):
+            method = self._evaluate_method(node.args[0])
+            if method:
+                url = self._evaluate_url(node.args[1])
+                if url is not None:
+                    path = extract_path(url, self.base_url)
+                    if path is not None:
+                        self.usages.append(Usage(self.file, node.lineno, method, path))
+
+        # Direct method calls: get(), post(), requests.get(), client.get(), etc.
         method = self._method_of(node.func)
         if method and node.args:
             url = self._evaluate_url(node.args[0])
@@ -101,13 +133,30 @@ class _CallVisitor(ast.NodeVisitor):
                 path = extract_path(url, self.base_url)
                 if path is not None:
                     self.usages.append(Usage(self.file, node.lineno, method, path))
+
         self.generic_visit(node)
 
     def _method_of(self, func) -> str | None:
+        # requests.get(), httpx.get(), etc.
         if isinstance(func, ast.Name) and func.id in HTTP_METHODS:
             return func.id
+
+        # requests.request("GET", url) - first arg is method
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr in REQUEST_METHOD_CALLS
+            and func.value
+            and isinstance(func.value, ast.Name)
+            and func.value.id in ("requests", "httpx")
+        ):
+            return "_request_"
+        if isinstance(func, ast.Name) and func.id in REQUEST_METHOD_CALLS:
+            return "_request_"
+
+        # client.get(), client.post(), etc. - attribute access
         if isinstance(func, ast.Attribute) and func.attr in HTTP_METHODS:
             return func.attr
+
         return None
 
     def _evaluate_url(self, arg) -> str | None:
@@ -124,4 +173,12 @@ class _CallVisitor(ast.NodeVisitor):
                 else:
                     return None
             return "".join(parts)
+        return None
+
+    def _evaluate_method(self, node: ast.expr) -> str | None:
+        """Evaluate a method argument to extract HTTP method string."""
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            method = node.value.lower()
+            if method in HTTP_METHODS:
+                return method
         return None

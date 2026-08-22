@@ -78,7 +78,7 @@ infra/terraform/   # AWS IaC (VPC, RDS, ElastiCache, ECS Fargate, ALB)
 scripts/
 ├── demo_pr.py     # full live pipeline demo (seed repo -> PR -> CI loop)
 └── aws/           # upload-secrets.ps1 (SSM Parameter Store)
-tests/             # pytest suite (319 tests)
+tests/             # pytest suite (376 tests)
 ```
 
 ## Setup
@@ -197,7 +197,7 @@ docker compose up api         # FastAPI on :8000 (with postgres + redis)
 
 1. **Ingestion** — fetch the vendor's OpenAPI spec with retries/backoff and ETag caching; store each version content-addressed (filename = SHA-256 digest), so history is immutable and deduplicated.
 2. **Detection** — normalize both specs (strip descriptions, sort, keep only semantics), then apply rules: endpoint removed, parameter removed/required/type-changed, response code removed = `breaking`; new endpoints = `additive`.
-3. **Impact** — scan each file: `ast` for Python; a dedicated tokenizer for JS/TS (`fetch()`, `axios.get/post`, `axios({method, url})`, template literals, module-level URL constants). Resolve f-string/template URLs via constant folding (`BASE = "https://api.github.com"`), match call sites against spec path templates (`/repos/{owner}/{repo}`), and join with breaking changes.
+3. **Impact** — scan each file: `ast` for Python; a dedicated tokenizer for JS/TS (`fetch()`, `axios.get/post`, `axios({method, url})`, `got.get/post`, `superagent.get/post`, `ky.get/post`, template literals, module-level URL constants). Resolve f-string/template URLs via constant folding (`BASE = "https://api.github.com"`), match call sites against spec path templates (`/repos/{owner}/{repo}`), and join with breaking changes.
 4. **Fix agent** — a LangGraph agent reads the impact report, proposes a patch, applies it, validates syntax (Python or JS depending on file), and retries up to `FIX_MAX_ATTEMPTS` times. Vendors may supply their own fix guidance and preferred model. The LLM is any OpenAI-compatible endpoint (Gemini, OpenAI, OpenRouter) with a free-tier fallback on 429 rate limits.
 5. **Semantic guard** — after syntax validation, the agent re-scans the patched content with the AST scanner. If the removed endpoint is still called, the patch is rejected and the agent retries with the error as context. This prevents no-op patches (LLM echoing the original line) from being pushed.
 6. **PR + CI self-heal** — Argus pushes the fixed files to a branch, opens a PR, and polls the check runs. On failure it extracts the error window from the Actions job log (`##[error]`/`Traceback`), posts it as a PR comment, and re-runs the agent with the error as context — until CI is green or attempts run out.
@@ -309,7 +309,7 @@ Required GitHub secrets: `AWS_DEPLOY_ROLE_ARN` (OIDC role to assume), `TF_STATE_
 
 ## Known MVP limits
 
-- Python scanning covers `requests`/`httpx` style calls; `requests.request("GET", ...)` style and async clients not yet supported. JS/TS covers `fetch`/`axios` idioms only
+- Python scanning covers `requests`/`httpx` style calls, `requests.request()` dynamic calls, and async clients (`httpx.AsyncClient`, `aiohttp.ClientSession`). JS/TS covers `fetch`, `axios`, `got`, `superagent`, and `ky`
 - Response-body usage analysis not yet supported
 - GitHub App private key must be kept secret; classic PATs work as a simpler fallback
 - Free-tier LLMs may produce no-op patches; the semantic guard catches these but adds latency (paid models fix this entirely)
