@@ -6,6 +6,9 @@ from app.scan.models import Usage
 from app.scan.scanner import extract_path
 
 JS_METHODS = ("get", "post", "put", "patch", "delete", "head", "options")
+
+# Libs that follow got.<method>() / superagent.<method>() / ky.<method>() pattern
+HTTP_CLIENT_LIBS = ("got", "superagent", "ky")
 _STRING = re.compile(r"""(['"])(.*?)\1""", re.DOTALL)
 _TEMPLATE = re.compile(r"""`([^`]*)`""", re.DOTALL)
 _TEMPLATE_VAR = re.compile(r"\$\{([A-Za-z_$][\w$]*)\}")
@@ -54,11 +57,13 @@ class JsScanner:
         name = name.strip()
         args = args[: args.rfind(")")] if args.endswith(")") else args
         parts = _split_top_level(args)
+
         if name == "fetch":
             if not parts:
                 return None, None
             method = self._options_method(parts[1]) if len(parts) > 1 else "get"
             return method or "get", self._eval_url(parts[0], constants)
+
         if name == "axios":
             method = "get"
             url_arg = parts[0] if parts else None
@@ -72,11 +77,35 @@ class JsScanner:
                 if options_url is not None:
                     return method, options_url
             return method, self._eval_url(url_arg or "", constants)
+
         if name.startswith("axios."):
             method = name.split(".", 1)[1].lower()
             if method not in JS_METHODS or not parts:
                 return None, None
             return method, self._eval_url(parts[0], constants)
+
+        # got.get(), ky.get(), superagent.get() - same pattern
+        if name.startswith(("got.", "ky.", "superagent.")):
+            lib_method = name.split(".", 1)[1].lower()
+            if lib_method not in JS_METHODS or not parts:
+                return None, None
+            return lib_method, self._eval_url(parts[0], constants)
+
+        # superagent("GET", url) - request-style call
+        if name == "superagent" and len(parts) >= 2:
+            method = self._eval_url(parts[0], constants)
+            if method:
+                method = method.lower()
+            if method and method in JS_METHODS:
+                return method, self._eval_url(parts[1], constants)
+
+        # got(url) or got(url, options) - defaults to GET
+        if name in ("got", "ky"):
+            if not parts:
+                return None, None
+            method = self._options_method(parts[1]) if len(parts) > 1 else "get"
+            return method or "get", self._eval_url(parts[0], constants)
+
         return None, None
 
     def _eval_url(self, raw: str, constants: dict[str, str]) -> str | None:
@@ -133,7 +162,8 @@ def _iter_calls(source: str):
             i = length if end == -1 else end + 2
             continue
         match = _IDENT.match(source, i)
-        if match and match.group(0) in ("fetch", "axios"):
+        ident = match.group(0) if match else ""
+        if ident in ("fetch", "axios", *HTTP_CLIENT_LIBS):
             j = _skip_ws(source, match.end())
             if j < length and source[j] == "(":
                 end = _match_balanced(source, j, "(", ")")
@@ -141,8 +171,9 @@ def _iter_calls(source: str):
                     yield i, end + 1, source[i : end + 1]
                     i = end + 1
                     continue
+            # axios.get() / got.get() / superagent.get() / ky.get()
             if (
-                match.group(0) == "axios"
+                ident in ("axios", *HTTP_CLIENT_LIBS)
                 and j < length
                 and source[j] == "."
             ):
@@ -155,6 +186,17 @@ def _iter_calls(source: str):
                             yield i, end + 1, source[i : end + 1]
                             i = end + 1
                             continue
+            # superagent("GET", url) - request-style call
+            if (
+                ident == "superagent"
+                and j < length
+                and source[j] == "("
+            ):
+                end = _match_balanced(source, j, "(", ")")
+                if end != -1:
+                    yield i, end + 1, source[i : end + 1]
+                    i = end + 1
+                    continue
         i += 1
 
 
