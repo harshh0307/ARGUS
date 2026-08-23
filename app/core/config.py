@@ -47,6 +47,13 @@ class Settings(BaseSettings):
     embedding_base_url: str | None = None
     embedding_model: str = "text-embedding-3-small"
     search_limit: int = 10
+    # Guardrail settings
+    llm_timeout_seconds: int = 60
+    llm_max_tokens: int = 1024
+    fix_max_cost_per_run: float = 1.0
+    fix_max_tokens_per_run: int = 500000
+    fix_token_budget_max: int = 120000
+    fix_max_patch_history: int = 10
 
 
 @lru_cache
