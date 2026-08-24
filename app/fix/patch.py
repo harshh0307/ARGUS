@@ -131,7 +131,7 @@ def _check_js_throw_patterns(content: str) -> str | None:
     lines = content.split("\n")
     for line_no, line in enumerate(lines, 1):
         stripped = line.strip()
-        if not stripped or stripped.startswith("//") or stripped.startswith("/*"):
+        if not stripped or stripped.startswith(("//", "/*")):
             continue
         # throw used as IIFE return value: (() => { throw ... })()
         if re.search(r"\(\s*\(\s*\)\s*=>\s*\{[^}]*throw\s+new\s+", stripped):

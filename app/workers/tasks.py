@@ -9,6 +9,7 @@ from app.db.repository import (
     touch_repository,
     upsert_repository,
 )
+from app.github.client import GitHubApiError
 from app.registry.vendors import get_vendor, list_vendors
 from app.services.pipeline import detect_changes, run_repo_pipeline
 
@@ -49,7 +50,7 @@ def scan_and_fix(repository_id: int, merge: bool = True) -> dict:
             merge=merge,
             vendor_slug=vendor_slug,
         )
-    except Exception as exc:
+    except (GitHubApiError, OSError, ValueError) as exc:
         return {
             "repository_id": repository_id,
             "owner": owner,
@@ -95,7 +96,7 @@ def poll_all_vendors() -> dict:
             continue
         try:
             summary[vendor.slug] = run_detection(vendor.slug)
-        except Exception as exc:
+        except (GitHubApiError, OSError, ValueError) as exc:
             summary[vendor.slug] = {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
     return summary
 

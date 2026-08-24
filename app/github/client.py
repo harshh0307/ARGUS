@@ -47,7 +47,6 @@ class GitHubClient:
         return {"Authorization": f"Bearer {self._token_provider.get_token()}"}
 
     def _request(self, method: str, path: str, **kwargs) -> dict | None:
-        last_exc = None
         for attempt in range(self._max_retries):
             response = self._client.request(
                 method,
