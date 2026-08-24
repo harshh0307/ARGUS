@@ -41,7 +41,10 @@ def _extract_tarball(data: bytes, dest: Path) -> None:
             if not parts:
                 continue
             member.name = str(Path(*parts))
-        tar.extractall(dest, filter="data")
+        try:
+            tar.extractall(dest, filter="data")
+        except TypeError:
+            tar.extractall(dest)
 
 
 def scan_changes(settings: Settings, vendor_slug: str, root: Path) -> list:
@@ -150,16 +153,21 @@ def run_repo_pipeline(
 
         files: dict[str, str] = {}
         for impact in impacts:
-            path = root / impact.usage.file
-            if path not in files:
-                files[impact.usage.file] = path.read_text(encoding="utf-8-sig")
+            if impact.usage.file not in files:
+                files[impact.usage.file] = (root / impact.usage.file).read_text(encoding="utf-8-sig")
         outcome.files = files
 
-        stale = client.find_open_pull(owner, repo, branch)
-        if stale is not None:
-            client.close_pull(owner, repo, stale)
-        if client.get_ref(owner, repo, branch) is not None:
-            client.delete_branch(owner, repo, branch)
+        try:
+            stale = client.find_open_pull(owner, repo, branch)
+            if stale is not None:
+                client.close_pull(owner, repo, stale)
+        except GitHubApiError:
+            pass
+        try:
+            if client.get_ref(owner, repo, branch) is not None:
+                client.delete_branch(owner, repo, branch)
+        except GitHubApiError:
+            pass
 
         model = build_suggestion_model(settings, vendor_slug=vendor_slug)
         body = build_pr_body(

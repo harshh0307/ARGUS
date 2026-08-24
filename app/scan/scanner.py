@@ -35,6 +35,11 @@ def extract_path(url: str, base_url: str) -> str | None:
         path = url
     else:
         return None
+    # Strip query strings and fragments
+    for sep in ("?", "#"):
+        idx = path.find(sep)
+        if idx != -1:
+            path = path[:idx]
     return path if path.startswith("/") else None
 
 
@@ -109,6 +114,30 @@ class _CallVisitor(ast.NodeVisitor):
         self.base_url = base_url
         self.constants = constants
         self.usages: list[Usage] = []
+        self._variables: dict[str, str] = {}
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        old_vars = dict(self._variables)
+        self._collect_local_assigns(node)
+        self.generic_visit(node)
+        self._variables = old_vars
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        old_vars = dict(self._variables)
+        self._collect_local_assigns(node)
+        self.generic_visit(node)
+        self._variables = old_vars
+
+    def _collect_local_assigns(self, func_node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        for node in ast.walk(func_node):
+            if (
+                isinstance(node, ast.Assign)
+                and isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, str)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+            ):
+                self._variables[node.targets[0].id] = node.value.value
 
     def visit_Call(self, node: ast.Call) -> None:
         # requests.request("GET", url) - method in first arg, URL in second
@@ -159,9 +188,21 @@ class _CallVisitor(ast.NodeVisitor):
 
         return None
 
+    def _resolve_name(self, name: str) -> str | None:
+        if name in self._variables:
+            return self._variables[name]
+        if name in self.constants:
+            return self.constants[name]
+        return None
+
     def _evaluate_url(self, arg) -> str | None:
         if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
             return arg.value
+        if isinstance(arg, ast.Name):
+            resolved = self._resolve_name(arg.id)
+            if resolved is not None:
+                return resolved
+            return None
         if isinstance(arg, ast.JoinedStr):
             parts = []
             for value in arg.values:
@@ -169,7 +210,8 @@ class _CallVisitor(ast.NodeVisitor):
                     parts.append(value.value)
                 elif isinstance(value, ast.FormattedValue) and isinstance(value.value, ast.Name):
                     name = value.value.id
-                    parts.append(self.constants.get(name, f"{{{name}}}"))
+                    resolved = self._resolve_name(name)
+                    parts.append(resolved if resolved is not None else f"{{{name}}}")
                 else:
                     return None
             return "".join(parts)

@@ -302,7 +302,7 @@ def test_webhook_installation_unsuspended_deactivates(tmp_path):
     assert response.json()["reason"] == "installation unsuspended -> owner acme active=False"
 
 
-def test_webhook_installation_malformed_payload_returns_500(tmp_path):
+def test_webhook_installation_malformed_payload_returns_200_with_error(tmp_path):
     engine = seeded_engine(tmp_path)
     url = engine.url.render_as_string(hide_password=False)
     client = TestClient(
@@ -310,7 +310,9 @@ def test_webhook_installation_malformed_payload_returns_500(tmp_path):
         raise_server_exceptions=False,
     )
     response = _post_webhook(client, "installation", {"action": "created"})
-    assert response.status_code == 500
+    assert response.status_code == 200
+    assert response.json()["dispatched"] is False
+    assert "malformed payload" in response.json()["reason"]
 
 
 def test_webhook_repository_dispatch_action_is_ignored(tmp_path, monkeypatch):

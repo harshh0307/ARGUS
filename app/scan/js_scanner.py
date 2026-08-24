@@ -13,7 +13,7 @@ _STRING = re.compile(r"""(['"])(.*?)\1""", re.DOTALL)
 _TEMPLATE = re.compile(r"""`([^`]*)`""", re.DOTALL)
 _TEMPLATE_VAR = re.compile(r"\$\{([A-Za-z_$][\w$]*)\}")
 _CONST = re.compile(
-    r"""\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*(['"`])(.*?)\2\s*;?\s*$""", re.MULTILINE
+    r"""\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(['"`])(.*?)\2\s*;?\s*$""", re.MULTILINE
 )
 _IDENT = re.compile(r"[A-Za-z_$][\w$]*")
 
