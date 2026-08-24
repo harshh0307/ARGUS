@@ -9,6 +9,7 @@ from app.db.repository import (
     touch_repository,
     upsert_repository,
 )
+from app.github.client import GitHubApiError
 from app.registry.vendors import get_vendor, list_vendors
 from app.services.pipeline import detect_changes, run_repo_pipeline
 
@@ -40,14 +41,22 @@ def scan_and_fix(repository_id: int, merge: bool = True) -> dict:
     finally:
         session.close()
 
-    outcome = run_repo_pipeline(
-        settings,
-        owner,
-        name,
-        branch="argus/fix",
-        merge=merge,
-        vendor_slug=vendor_slug,
-    )
+    try:
+        outcome = run_repo_pipeline(
+            settings,
+            owner,
+            name,
+            branch="argus/fix",
+            merge=merge,
+            vendor_slug=vendor_slug,
+        )
+    except (GitHubApiError, OSError, ValueError) as exc:
+        return {
+            "repository_id": repository_id,
+            "owner": owner,
+            "name": name,
+            "error": f"pipeline failed: {type(exc).__name__}: {str(exc)[:500]}",
+        }
     result = outcome.pr_result
     return {
         "repository_id": repository_id,
@@ -85,7 +94,10 @@ def poll_all_vendors() -> dict:
     for vendor in list_vendors(settings):
         if not vendor.enabled:
             continue
-        summary[vendor.slug] = run_detection(vendor.slug)
+        try:
+            summary[vendor.slug] = run_detection(vendor.slug)
+        except (GitHubApiError, OSError, ValueError) as exc:
+            summary[vendor.slug] = {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
     return summary
 
 

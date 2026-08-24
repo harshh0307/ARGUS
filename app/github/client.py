@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import time
 
 import httpx
 
@@ -20,6 +21,7 @@ class GitHubClient:
         base_url: str = "https://api.github.com",
         timeout: float = 30.0,
         client: httpx.Client | None = None,
+        max_retries: int = 3,
     ):
         if token_provider is None:
             if token:
@@ -30,6 +32,7 @@ class GitHubClient:
                 token_provider = build_token_provider(get_settings())
         self._token_provider = token_provider
         self._base_url = base_url.rstrip("/")
+        self._max_retries = max_retries
         self._client = client or httpx.Client(
             headers={
                 "Accept": "application/vnd.github+json",
@@ -44,21 +47,31 @@ class GitHubClient:
         return {"Authorization": f"Bearer {self._token_provider.get_token()}"}
 
     def _request(self, method: str, path: str, **kwargs) -> dict | None:
-        response = self._client.request(
-            method,
-            f"{self._base_url}{path}",
-            headers=self._auth_headers(),
-            **kwargs,
-        )
-        if response.status_code == 404:
-            return None
-        if response.status_code == 204:
-            return {}
-        if response.status_code >= 400:
-            raise GitHubApiError(
-                f"{method} {path} -> {response.status_code}: {response.text[:300]}"
+        for attempt in range(self._max_retries):
+            response = self._client.request(
+                method,
+                f"{self._base_url}{path}",
+                headers=self._auth_headers(),
+                **kwargs,
             )
-        return response.json()
+            if response.status_code == 429:
+                retry_after = response.headers.get("Retry-After")
+                delay = float(retry_after) if retry_after else min(30.0 * (2 ** attempt), 120.0)
+                time.sleep(delay)
+                continue
+            if response.status_code in (502, 503, 504):
+                time.sleep(min(5.0 * (2 ** attempt), 60.0))
+                continue
+            if response.status_code == 404:
+                return None
+            if response.status_code == 204:
+                return {}
+            if response.status_code >= 400:
+                raise GitHubApiError(
+                    f"{method} {path} -> {response.status_code}: {response.text[:300]}"
+                )
+            return response.json()
+        raise GitHubApiError(f"{method} {path} -> failed after {self._max_retries} retries")
 
     def _request_text(self, method: str, path: str, **kwargs) -> str | None:
         response = self._client.request(

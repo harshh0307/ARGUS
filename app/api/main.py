@@ -338,7 +338,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         handler = _WEBHOOK_HANDLERS.get(event)
         if handler is None:
             return WebhookOut(ok=True, event=event, dispatched=False, reason="ignored event")
-        return handler(payload, settings)
+        try:
+            return handler(payload, settings)
+        except KeyError as exc:
+            return WebhookOut(ok=True, event=event, dispatched=False, reason=f"malformed payload: missing {exc}")
 
     return app
 

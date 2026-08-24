@@ -1,7 +1,5 @@
 from types import SimpleNamespace
 
-import pytest
-
 from app.db.engine import get_engine, init_db, session_factory
 from app.db.models import Repository
 from app.db.repository import set_default_engine
@@ -125,7 +123,9 @@ def test_scan_and_fix_without_pr_result(monkeypatch, tmp_path):
     assert result["impacted"] == 0
 
 
-def test_scan_and_fix_propagates_pipeline_failure(monkeypatch, tmp_path):
+def test_scan_and_fix_catches_pipeline_failure(monkeypatch, tmp_path):
+    from app.github.client import GitHubApiError
+
     settings, engine = seeded(tmp_path)
     session = session_factory(engine)()
     repo = Repository(owner="acme", name="web", default_branch="main")
@@ -137,11 +137,12 @@ def test_scan_and_fix_propagates_pipeline_failure(monkeypatch, tmp_path):
     monkeypatch.setattr(tasks, "get_settings", lambda: settings)
     monkeypatch.setattr(tasks, "open_session", lambda s: session_factory(engine)())
     monkeypatch.setattr(
-        tasks, "run_repo_pipeline", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+        tasks, "run_repo_pipeline", lambda *a, **k: (_ for _ in ()).throw(GitHubApiError("boom"))
     )
 
-    with pytest.raises(RuntimeError, match="boom"):
-        tasks.scan_and_fix(repo_id)
+    result = tasks.scan_and_fix(repo_id)
+    assert "error" in result
+    assert "boom" in result["error"]
 
 
 def test_scan_and_fix_with_pr_merge_error(monkeypatch, tmp_path):
