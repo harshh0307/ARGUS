@@ -56,6 +56,36 @@ repo clone ─▶ AST usage scan ─▶ impact report ┤
 | Multi-vendor registry, workers, Postgres, API | ✅ | Celery + Redis, PostgreSQL, FastAPI |
 | AWS cloud deployment | ✅ | ECS Fargate, RDS, ElastiCache, Terraform, GitHub Actions CI/CD |
 
+## How It Works (end-to-end)
+
+```
+1. Webhook received (push event)
+       ↓
+2. Repo downloaded as tarball
+       ↓
+3. Old spec (pinned) vs new spec (latest) → semantic diff
+       ↓
+4. Diff finds breaking changes (removed endpoints, changed params, etc.)
+       ↓
+5. Scanner finds ALL API call sites in codebase
+       ↓
+6. Impact assessment: match call sites AGAINST breaking changes only
+       ↓
+7. LLM generates fixes for each impacted call site
+       ↓
+8. Validator checks: syntax (Python/JS), unreachable code, throw-in-expression
+       ↓
+9. Semantic guard: re-scans patched code, rejects if still calls removed endpoint
+       ↓
+10. Fixes committed to branch, PR opened
+       ↓
+11. CI check runs polled → on failure, error fed back to LLM → retry
+       ↓
+12. When CI passes → merge (optional)
+```
+
+**Key insight:** Argus only fixes endpoints that have a **breaking diff** in the spec AND are **actually called** in the codebase. Non-breaking changes and unused endpoints are ignored.
+
 ## Project layout
 
 ```
@@ -65,6 +95,13 @@ app/
 ├── detection/     # normalize + semantic diff + breaking-change rules
 ├── scan/          # Python ast + JS/TS scanner, impact assessment
 ├── fix/           # LangGraph fix agent, patch engine, multi-provider LLM
+│   ├── agent.py       # LangGraph graph with guardrails
+│   ├── patch.py       # patch application + validation (unreachable code, throw-in-expression)
+│   ├── prompt.py      # LLM prompt with injection sanitization
+│   ├── validator.py   # patch validation
+│   ├── token_budget.py # token budget management
+│   ├── cost_tracker.py # per-model cost tracking
+│   └── errors.py      # error classification (rate limit, timeout, etc.)
 ├── github/        # GitHub client, App token auth, CI logs, PR self-heal loop
 ├── registry/      # vendor registry (github, stripe, twilio)
 ├── db/            # SQLAlchemy models + persistence layer
@@ -77,8 +114,10 @@ infra/terraform/   # AWS IaC (VPC, RDS, ElastiCache, ECS Fargate, ALB)
 .github/workflows/ # CI (tests+lint) + deploy (ECR → terraform → ECS)
 scripts/
 ├── demo_pr.py     # full live pipeline demo (seed repo -> PR -> CI loop)
+├── check_deprecated.py  # check deprecated API endpoints
+├── test_hmac.py   # test HMAC webhook signature
 └── aws/           # upload-secrets.ps1 (SSM Parameter Store)
-tests/             # pytest suite (376 tests)
+tests/             # pytest suite (513 tests)
 ```
 
 ## Setup
@@ -121,7 +160,7 @@ argus pr OWNER/REPO --vendor github  # full loop: detect, scan, fix, open PR, se
 argus pr OWNER/REPO --merge  # same, but squash-merge when CI passes
 ```
 
-### Celery workers (Phase 2)
+### Celery workers
 
 ```powershell
 # worker (executes tasks from Redis)
@@ -133,7 +172,7 @@ celery -A app.workers.celery_app beat --loglevel=info
 
 Tasks: `argus.poll_all_vendors` (beat-scheduled), `argus.run_detection`, `argus.scan_and_fix`, `argus.register_repository`. Requires `DATABASE_URL` and `REDIS_URL` (docker-compose provides Postgres + Redis).
 
-### FastAPI (Phase 2)
+### FastAPI
 
 ```powershell
 uvicorn app.api.main:app --host 0.0.0.0 --port 8000
@@ -147,7 +186,7 @@ uvicorn app.api.main:app --host 0.0.0.0 --port 8000
 | `GET /api/v1/repositories` / `POST /api/v1/repositories` | register/list repos (`{owner, name, default_branch, vendor_slug}`) |
 | `GET /api/v1/installations` | GitHub App installations (owner, active state) recorded from webhooks |
 | `GET /api/v1/search/changelog?q=...&vendor=...&limit=...` | semantic search across detected changes (embeddings via `EMBEDDING_*`, keyword fallback; every `argus detect` batch-embeds new changes) |
-| `POST /api/v1/webhook` | GitHub webhook receiver; HMAC-verified (needs `WEBHOOK_SECRET`). Events: `push` and `repository_dispatch` → `scan_and_fix` for registered repos; `installation` → upserts install rows (active on created/suspend, inactive on deleted/unsuspended). Dispatches via Celery with an inline-thread fallback when Redis is down |
+| `POST /api/v1/webhook` | GitHub webhook receiver; HMAC-verified (needs `WEBHOOK_SECRET`). Events: `push` and `repository_dispatch` → `scan_and_fix` for registered repos; `installation` → upserts install rows. Malformed payloads return 200 with error reason (no crash) |
 
 Point `https://your.host/webhook` at the repo's GitHub webhook with content type `application/json` and a secret matching `WEBHOOK_SECRET`.
 
@@ -193,46 +232,96 @@ docker compose up api         # FastAPI on :8000 (with postgres + redis)
 .\.venv\Scripts\python -m ruff check .
 ```
 
-## How it works (in short)
+## Guardrails
+
+The fix agent includes comprehensive guardrails to prevent bad patches:
+
+| Guardrail | What it does |
+|---|---|
+| **Syntax validation** | Python: `ast.parse()`. JS/TS: bracket balancing + throw-in-expression detection |
+| **Unreachable code detection** | Catches dead code after `raise`/`return`/`break`/`continue` |
+| **Throw-in-expression detection** | Catches 7 patterns: IIFE, async IIFE, dummy assignment, logical expression, comma expression, function argument, string expression |
+| **Semantic guard** | Re-scans patched AST; rejects if removed endpoint still called |
+| **Duplicate patch detection** | Signature-based; same patch proposed twice → give up |
+| **Progress stall detection** | Same error 2x in a row → give up |
+| **Rate limit handling** | Provider-specific backoff (30s, 60s, 120s) |
+| **Token budget** | Truncates large files to fit LLM context window |
+| **Cost tracking** | Per-model pricing, budget limits |
+| **Prompt sanitization** | 13 injection patterns stripped from code context |
+
+## Scanner capabilities
+
+### Python
+- `requests.get()`, `requests.post()`, etc.
+- `httpx.get()`, `httpx.AsyncClient`
+- `aiohttp.ClientSession`
+- `requests.request("GET", url)` dynamic calls
+- F-string URL resolution (`f"{BASE_URL}/repos/{OWNER}/{REPO}"`)
+- Module-level constant resolution
+- Local variable resolution
+
+### JavaScript/TypeScript
+- `fetch()`, `axios.get()`, `axios.post()`
+- `got.get()`, `superagent.get()`, `ky.get()`
+- Template literal URLs (`` `${BASE_URL}/repos/${OWNER}/${REPO}` ``)
+- `const`/`let`/`var` constant resolution
+- `.ts`, `.tsx`, `.jsx`, `.mjs`, `.cjs` support
+
+## How it works (detailed)
 
 1. **Ingestion** — fetch the vendor's OpenAPI spec with retries/backoff and ETag caching; store each version content-addressed (filename = SHA-256 digest), so history is immutable and deduplicated.
 2. **Detection** — normalize both specs (strip descriptions, sort, keep only semantics), then apply rules: endpoint removed, parameter removed/required/type-changed, response code removed = `breaking`; new endpoints = `additive`.
-3. **Impact** — scan each file: `ast` for Python; a dedicated tokenizer for JS/TS (`fetch()`, `axios.get/post`, `axios({method, url})`, `got.get/post`, `superagent.get/post`, `ky.get/post`, template literals, module-level URL constants). Resolve f-string/template URLs via constant folding (`BASE = "https://api.github.com"`), match call sites against spec path templates (`/repos/{owner}/{repo}`), and join with breaking changes.
-4. **Fix agent** — a LangGraph agent reads the impact report, proposes a patch, applies it, validates syntax (Python or JS depending on file), and retries up to `FIX_MAX_ATTEMPTS` times. Vendors may supply their own fix guidance and preferred model. The LLM is any OpenAI-compatible endpoint (Gemini, OpenAI, OpenRouter) with a free-tier fallback on 429 rate limits.
-5. **Semantic guard** — after syntax validation, the agent re-scans the patched content with the AST scanner. If the removed endpoint is still called, the patch is rejected and the agent retries with the error as context. This prevents no-op patches (LLM echoing the original line) from being pushed.
-6. **PR + CI self-heal** — Argus pushes the fixed files to a branch, opens a PR, and polls the check runs. On failure it extracts the error window from the Actions job log (`##[error]`/`Traceback`), posts it as a PR comment, and re-runs the agent with the error as context — until CI is green or attempts run out.
-7. **Merge-on-green** — with `--merge`, Argus squash-merges the PR when CI passes and deletes the fix branch. If merge is rejected (e.g., branch protection), it warns and leaves the PR open.
+3. **Impact** — scan each file: `ast` for Python; a dedicated tokenizer for JS/TS. Resolve variable-assigned URLs via constant folding, match call sites against spec path templates, and join with breaking changes. Query strings and fragments are stripped during path extraction.
+4. **Fix agent** — a LangGraph agent reads the impact report, proposes a patch, applies it, validates syntax (Python, JS, TS, TSX, JSX), checks for unreachable code and throw-in-expression patterns, and retries up to `FIX_MAX_ATTEMPTS` times. The LLM is any OpenAI-compatible endpoint with free-tier fallback on 429.
+5. **Semantic guard** — after syntax validation, the agent re-scans the patched content with the AST scanner. If the removed endpoint is still called, the patch is rejected and the agent retries with the error as context.
+6. **PR + CI self-heal** — Argus pushes the fixed files to a branch, opens a PR, and polls the check runs. On failure it extracts the error from the Actions job log, posts it as a PR comment, and re-runs the agent with the error as context — until CI is green or attempts run out.
+7. **Merge-on-green** — with `--merge`, Argus squash-merges the PR when CI passes and deletes the fix branch.
+
+## Error handling
+
+The pipeline gracefully handles:
+
+- **GitHub API failures**: Automatic retry with exponential backoff on 429 (rate limit), 502, 503, 504
+- **Malformed webhook payloads**: Returns 200 with error reason (no crash)
+- **Pipeline exceptions**: Caught and returned as error dicts (no worker crash)
+- **Per-vendor errors**: Caught individually in batch polling (other vendors continue)
+- **File not found**: Graceful handling when scanned files are missing
+- **Network errors**: Retry logic on all external API calls
 
 ## Demo
 
-`scripts/demo_pr.py` runs the whole pipeline live: creates a seed repo calling removed GitHub endpoints, detects the breaking changes, scans, fixes, opens a PR, and self-heals from CI feedback (verified live: CI failures are fed back to the fix agent, semantic guard rejects no-op patches, and retries push real fixes).
+`scripts/demo_pr.py` runs the whole pipeline live: creates a seed repo calling removed GitHub endpoints, detects the breaking changes, scans, fixes, opens a PR, and self-heals from CI feedback.
 
-`scripts/demo_search.py` seeds the changelog with 8 sample GitHub changes and lets you try the semantic search without a full live detection:
+`scripts/check_deprecated.py` checks which GitHub API endpoints are deprecated:
+
+```powershell
+python scripts/check_deprecated.py
+```
+
+`scripts/demo_search.py` seeds the changelog with 8 sample GitHub changes and lets you try the semantic search:
 
 ```powershell
 python scripts/demo_search.py --db sqlite:///data/argus.db
 uvicorn app.api.main:app
 curl "http://127.0.0.1:8000/api/v1/search/changelog?q=transfer%20repository"
-# 0.648 post /repos/{owner}/{repo}/transfer
 ```
 
 ## Roadmap
 
 - **Phase 1 (MVP):** detection ✅, scanning ✅, fix agent ✅, semantic guard ✅, PR + CI self-heal ✅, merge-on-green ✅, CLI + docker-compose ✅, live demo ✅
 - **Phase 2:** vendor registry ✅, Postgres persistence ✅, pipeline service layer ✅, Celery workers + Redis ✅, GitHub App OAuth + webhooks ✅, FastAPI read API ✅
-- **Phase 3:** AWS deployment — ECS Fargate, RDS, ElastiCache, S3, Terraform, GitHub Actions CI/CD ✅ (IaC validated; apply requires an AWS account)
+- **Phase 3:** AWS deployment — ECS Fargate, RDS, ElastiCache, S3, Terraform, GitHub Actions CI/CD ✅
 - **Phase 4:** JS/TS scanning ✅, per-vendor agents ✅, real-time webhooks ✅, pgvector changelog search ✅
+- **Phase 5:** Guardrails ✅, error handling ✅, edge case fixes ✅, full end-to-end verification ✅
 
-## AWS deployment (Phase 3)
+## AWS deployment
 
 Two deployment options:
 
-- **`infra/terraform/`** — production stack: VPC (2 AZs, NAT), RDS Postgres 16 (pgvector-compatible), ElastiCache Redis 7, S3 snapshot bucket, ECR repo, ECS Fargate cluster with `api` (behind an ALB), `worker`, and `beat` services, plus IAM roles and CloudWatch logging. Costs ~$130-150/month (not free-tier eligible).
-- **`infra/terraform-free/`** — single **EC2 `t4g.micro`** running the whole app via docker-compose. ~$0/month during the free tier (750 hrs/mo t4g.micro + 30GB gp3 + public IPv4 are included). No ALB/NAT/RDS/ElastiCache. This is the recommended option for free-tier accounts — **it is the verified, live deployment used by this repo's author**.
+- **`infra/terraform/`** — production stack: VPC (2 AZs, NAT), RDS Postgres 16 (pgvector-compatible), ElastiCache Redis 7, S3 snapshot bucket, ECR repo, ECS Fargate cluster with `api` (behind an ALB), `worker`, and `beat` services, plus IAM roles and CloudWatch logging. Costs ~$130-150/month.
+- **`infra/terraform-free/`** — single **EC2 `t4g.micro`** running the whole app via docker-compose. ~$0/month during the free tier. Recommended for free-tier accounts.
 
-### Free-tier deployment (`infra/terraform-free/`)
-
-Creates: t4g.micro Ubuntu instance (20GB gp3), SSH key (saved to `keys/`), security group (SSH from your IP + API on 8000), Elastic IP, IAM role with SSM read **and SSM Session Manager access** (manage the instance without SSH), and cloud-init that installs Docker, clones the repo, pulls `.env` from SSM, and runs `docker compose up`.
+### Free-tier deployment
 
 ```powershell
 # 1. AWS credentials (one time)
@@ -249,69 +338,23 @@ terraform -chdir=infra/terraform-free apply -var="ssh_cidr=<your-ip>/32"
 terraform -chdir=infra/terraform-free output health_url
 ```
 
-Verified live with the following battle-tested fixes baked into `user_data.sh.tpl` / `docker-compose.yml`:
-
-- Ubuntu 24.04 dropped the `awscli` apt package → the bootstrap installs it via `pip3 install awscli` instead
-- Celery `beat` runs as a non-root user and could not write `/app/celerybeat-schedule` → `working_dir: /tmp` on the beat service
-- The DB schema was created concurrently by `api`/`worker`/`beat` on startup, racing on Postgres → `init_db` now serializes DDL with a `pg_advisory_lock`
-- All long-running services use `restart: unless-stopped` so the stack comes back up automatically after an instance reboot
-
-Update the running app (from the instance): `git pull && docker compose up -d --build api worker beat` — automated in `scripts/aws/ec2-update.sh`.
-
-**Pause / resume / teardown** (saves free-tier hours when you're not using it):
+**Pause / resume / teardown:**
 
 ```powershell
-aws ec2 stop-instances --instance-ids $(terraform -chdir=infra/terraform-free output -raw instance_id)   # pause (~$0/mo storage only)
-aws ec2 start-instances --instance-ids $(terraform -chdir=infra/terraform-free output -raw instance_id)  # resume; containers auto-restart
-terraform -chdir=infra/terraform-free destroy -var="ssh_cidr=<your-ip>/32" -auto-approve                 # delete everything
+aws ec2 stop-instances --instance-ids $(terraform -chdir=infra/terraform-free output -raw instance_id)   # pause
+aws ec2 start-instances --instance-ids $(terraform -chdir=infra/terraform-free output -raw instance_id)  # resume
+terraform -chdir=infra/terraform-free destroy -var="ssh_cidr=<your-ip>/32" -auto-approve                 # delete
 ```
-
-### One-time prerequisites
-
-Run the bootstrap script — it creates the state bucket, DynamoDB lock table, GitHub OIDC provider + deploy role, attaches permissions, and uploads your `.env` secrets to SSM:
-
-```powershell
-.\scripts\aws\bootstrap.ps1 -Region us-east-1 -Environment dev -GitHubRepo your/ARGUS
-```
-
-It prints the two GitHub secrets to add (`AWS_DEPLOY_ROLE_ARN`, `TF_STATE_BUCKET`). If you'd rather do it manually:
-
-1. **State bucket** — create an S3 bucket + DynamoDB lock table for Terraform state.
-2. **AWS credentials** — configure locally via `aws configure` (or `AWS_PROFILE`).
-3. **Secrets** — upload your `.env` secrets to SSM Parameter Store:
-
-   ```powershell
-   .\scripts\aws\upload-secrets.ps1 -Region us-east-1 -Prefix /argus -EnvFile .env
-   ```
-
-### Deploy
-
-```powershell
-terraform -chdir=infra/terraform init `
-  -backend-config="bucket=<tf-state-bucket>" `
-  -backend-config="key=argus/terraform.tfstate" `
-  -backend-config="region=us-east-1"
-terraform -chdir=infra/terraform apply
-
-# build & push the image (or let GitHub Actions do it)
-docker build -t <account>.dkr.ecr.us-east-1.amazonaws.com/argus-dev:<tag> .
-docker push <account>.dkr.ecr.us-east-1.amazonaws.com/argus-dev:<tag>
-```
-
-The API is reachable at the ALB DNS name (from `terraform output alb_url`); health check: `GET /health`.
 
 ### CI/CD
 
 - `.github/workflows/ci.yml` — ruff + pytest + `terraform validate` on every push/PR
-- `.github/workflows/deploy.yml` — on push to `main`: test, build/push image to ECR, `terraform apply`, force new ECS deployments. The job is **skipped** (green) until `AWS_DEPLOY_ROLE_ARN` / `TF_STATE_BUCKET` secrets exist — run `scripts/aws/bootstrap.ps1` to create them and enable deployment.
+- `.github/workflows/deploy.yml` — on push to `main`: test, build/push image to ECR, `terraform apply`, force new ECS deployments
 
-Required GitHub secrets: `AWS_DEPLOY_ROLE_ARN` (OIDC role to assume), `TF_STATE_BUCKET`.
+## Known limits
 
-## Known MVP limits
-
-- Python scanning covers `requests`/`httpx` style calls, `requests.request()` dynamic calls, and async clients (`httpx.AsyncClient`, `aiohttp.ClientSession`). JS/TS covers `fetch`, `axios`, `got`, `superagent`, and `ky`
+- Python scanning covers `requests`/`httpx` style calls, `requests.request()` dynamic calls, and async clients. JS/TS covers `fetch`, `axios`, `got`, `superagent`, and `ky`
 - Response-body usage analysis not yet supported
 - GitHub App private key must be kept secret; classic PATs work as a simpler fallback
-- Free-tier LLMs may produce no-op patches; the semantic guard catches these but adds latency (paid models fix this entirely)
+- Free-tier LLMs may produce no-op patches; the semantic guard catches these but adds latency
 - Semantic search falls back to keyword matching when `EMBEDDING_API_KEY` is not configured
-- Phase 3 AWS free-tier deployment (EC2 t4g.micro + docker-compose) verified live
