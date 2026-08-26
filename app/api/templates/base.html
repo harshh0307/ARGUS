@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Argus Dashboard{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .stat-card { transition: all 0.2s; }
+        .stat-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+        .nav-link { transition: all 0.15s; }
+        .nav-link:hover { background: rgba(255,255,255,0.1); }
+        .nav-link.active { background: rgba(255,255,255,0.15); border-left: 3px solid #3b82f6; }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <!-- Top Nav -->
+    <nav class="bg-gray-900 text-white px-6 py-3 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+            <span class="text-xl font-bold tracking-tight">ARGUS</span>
+            <span class="text-gray-400 text-sm">The changelog that reads your codebase</span>
+        </div>
+        <div class="flex gap-1">
+            <a href="/dashboard" class="nav-link px-3 py-2 rounded text-sm">Overview</a>
+            <a href="/dashboard/vendors" class="nav-link px-3 py-2 rounded text-sm">Vendors</a>
+            <a href="/dashboard/activity" class="nav-link px-3 py-2 rounded text-sm">Activity</a>
+            <a href="/dashboard/repositories" class="nav-link px-3 py-2 rounded text-sm">Repositories</a>
+        </div>
+    </nav>
+
+    <main class="max-w-7xl mx-auto px-6 py-8">
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="text-center text-gray-400 text-xs py-4">
+        Argus API Migration Agent
+    </footer>
+</body>
+</html>

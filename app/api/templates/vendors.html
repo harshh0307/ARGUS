@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Argus Dashboard - Vendors{% endblock %}
+
+{% block content %}
+<div class="mb-8">
+    <h1 class="text-2xl font-bold text-gray-800 mb-2">API Vendors</h1>
+    <p class="text-gray-500">Monitor API vendors and their detection history.</p>
+</div>
+
+{% for v in vendors %}
+<div class="bg-white rounded-lg shadow mb-6">
+    <div class="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+            <h2 class="font-semibold text-gray-800 text-lg">{{ v.name }}</h2>
+            {% if v.enabled %}
+            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">Active</span>
+            {% else %}
+            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">Disabled</span>
+            {% endif %}
+        </div>
+        <div class="text-sm text-gray-500">Poll: {{ (v.poll_interval_seconds // 3600) }}h</div>
+    </div>
+    <div class="px-6 py-3 bg-gray-50 border-b border-gray-100">
+        <div class="text-xs text-gray-500 truncate">Spec: <a href="{{ v.spec_url }}" class="text-blue-600 hover:underline" target="_blank">{{ v.spec_url }}</a></div>
+    </div>
+
+    {% if v.runs %}
+    <table class="w-full">
+        <thead>
+            <tr class="text-left text-xs text-gray-500 uppercase">
+                <th class="px-6 py-3">Run ID</th>
+                <th class="px-6 py-3">Breaking</th>
+                <th class="px-6 py-3">Additive</th>
+                <th class="px-6 py-3">Old Digest</th>
+                <th class="px-6 py-3">New Digest</th>
+                <th class="px-6 py-3">Time</th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-50">
+            {% for r in v.runs %}
+            <tr class="hover:bg-gray-50 text-sm">
+                <td class="px-6 py-3 text-gray-600">#{{ r.id }}</td>
+                <td class="px-6 py-3">
+                    <span class="{% if r.breaking_count > 0 %}text-red-600 font-medium{% else %}text-gray-400{% endif %}">{{ r.breaking_count }}</span>
+                </td>
+                <td class="px-6 py-3 text-green-600">{{ r.additive_count }}</td>
+                <td class="px-6 py-3 text-gray-400 font-mono text-xs">{{ r.old_digest }}...</td>
+                <td class="px-6 py-3 text-gray-400 font-mono text-xs">{{ r.new_digest }}...</td>
+                <td class="px-6 py-3 text-gray-500">{% if r.created_at %}{{ r.created_at.strftime('%Y-%m-%d %H:%M') }}{% endif %}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="px-6 py-8 text-center text-gray-400 text-sm">No detection runs for this vendor yet.</div>
+    {% endif %}
+</div>
+{% endfor %}
+{% endblock %}
