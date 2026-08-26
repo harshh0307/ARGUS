@@ -39,7 +39,7 @@ def impact_dict():
 def test_vendors_carry_fix_guidance():
     settings = make_settings()
     slugs = {v.slug for v in list_vendors(settings)}
-    assert slugs == {"github", "stripe", "twilio"}
+    assert slugs == {"github", "stripe", "twilio", "slack", "aws", "azure", "google_cloud"}
     for slug in slugs:
         vendor = get_vendor(settings, slug)
         assert vendor.fix_guidance, f"{slug} should carry fix guidance"

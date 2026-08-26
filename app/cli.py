@@ -35,16 +35,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("detect", help="detect breaking API changes in the watched spec")
     p.add_argument("--vendor", default="github", help="vendor slug (default: github)")
+    p.add_argument("--vendors", nargs="+", help="detect for multiple vendors (e.g. --vendors github stripe)")
     p.set_defaults(func=cmd_detect)
 
     p = sub.add_parser("scan", help="scan a repo for call sites hit by breaking changes")
     p.add_argument("dir", nargs="?", default=".", help="repo directory to scan (default: .)")
     p.add_argument("--vendor", default="github", help="vendor slug (default: github)")
+    p.add_argument("--vendors", nargs="+", help="scan for multiple vendors (e.g. --vendors github stripe)")
+    p.add_argument("--languages", nargs="+", help="languages to scan (e.g. --languages py go ruby java php cs js)")
     p.set_defaults(func=cmd_scan)
 
     p = sub.add_parser("fix", help="generate and apply LLM fixes for impacted call sites")
     p.add_argument("dir", nargs="?", default=".", help="repo directory to fix (default: .)")
     p.add_argument("--vendor", default="github", help="vendor slug (default: github)")
+    p.add_argument("--vendors", nargs="+", help="fix for multiple vendors")
+    p.add_argument("--languages", nargs="+", help="languages to scan for fixes")
     p.add_argument("--dry-run", action="store_true", help="print diffs without writing files")
     p.add_argument("--max-attempts", type=int, default=None, help="fix attempts per call site")
     p.set_defaults(func=cmd_fix)
@@ -52,6 +57,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("pr", help="detect, scan, fix and open a self-healing PR")
     p.add_argument("repo", help="target repo as OWNER/REPO")
     p.add_argument("--vendor", default="github", help="vendor slug (default: github)")
+    p.add_argument("--vendors", nargs="+", help="detect and fix for multiple vendors")
+    p.add_argument("--languages", nargs="+", help="languages to scan and fix")
     p.add_argument("--dir", default=None, help="local checkout to scan (default: API tarball)")
     p.add_argument("--base", default=None, help="base branch (default: repo default branch)")
     p.add_argument("--branch", default="argus/fix", help="fix branch to create")
@@ -81,30 +88,41 @@ def cmd_vendors(args) -> int:
 
 def cmd_detect(args) -> int:
     settings = get_settings()
-    vendor_slug = getattr(args, "vendor", "github")
-    try:
-        detection = detect_changes(settings, vendor_slug)
-    except ValueError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
-    if settings.database_url:
-        persist_detection(settings, vendor_slug, detection, registry_get_vendor(settings, vendor_slug))
-    if detection.get("baselined"):
-        print(f"Argus baseline stored for {vendor_slug}; no diff to report yet")
-        return 0
-    print("Argus detected API changes in the watched spec:")
-    _print_changes(detection["changes"])
+    vendors = getattr(args, "vendors", None) or [getattr(args, "vendor", "github")]
+    all_changes = []
+    for vendor_slug in vendors:
+        try:
+            detection = detect_changes(settings, vendor_slug)
+        except ValueError as exc:
+            print(f"error [{vendor_slug}]: {exc}", file=sys.stderr)
+            continue
+        if settings.database_url:
+            persist_detection(settings, vendor_slug, detection, registry_get_vendor(settings, vendor_slug))
+        if detection.get("baselined"):
+            print(f"Argus baseline stored for {vendor_slug}; no diff to report yet")
+            continue
+        print(f"Argus detected API changes in {vendor_slug}:")
+        _print_changes(detection["changes"])
+        all_changes.extend(detection["changes"])
+    if not all_changes:
+        print("no changes detected")
     return 0
 
 
 def cmd_scan(args) -> int:
     settings = get_settings()
-    vendor_slug = getattr(args, "vendor", "github")
+    vendors = getattr(args, "vendors", None) or [getattr(args, "vendor", "github")]
+    languages = getattr(args, "languages", None)
     root = Path(args.dir)
-    impacts = scan_changes(settings, vendor_slug, root)
-    print(f"Scanned {args.dir}: {len(impacts)} impacted by breaking changes")
-    for impact in impacts:
-        print(f"  {impact}")
+    all_impacts = []
+    for vendor_slug in vendors:
+        impacts = scan_changes(settings, vendor_slug, root, languages=languages)
+        print(f"Scanned {args.dir} for {vendor_slug}: {len(impacts)} impacted by breaking changes")
+        for impact in impacts:
+            print(f"  {impact}")
+        all_impacts.extend(impacts)
+    if not all_impacts:
+        print("no impacted call sites")
     return 0
 
 
@@ -122,39 +140,53 @@ def _unified_diff(file: str, before: str, after: str) -> str:
 def cmd_fix(args) -> int:
     settings = get_settings()
     root = Path(args.dir)
-    try:
-        outcome = fix_directory(
-            settings,
-            root,
-            max_attempts=args.max_attempts,
-            dry_run=args.dry_run,
-            vendor_slug=getattr(args, "vendor", "github"),
-        )
-    except ValueError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
-    if not outcome.had_impacts:
-        print("no impacted call sites")
-        return 0
-    if args.dry_run:
-        fixed_count = 0
-        for step in outcome.steps:
-            if not step["ok"]:
-                print(f"  {step['file']}:{step['line']} FAILED: {step['err']}")
-                continue
-            fixed_count += 1
-            print(f"  {step['file']}:{step['line']} OK")
-            print(_unified_diff(str(root / step["file"]), step["before"], step["after"]))
-        print(f"{fixed_count}/{len(outcome.steps)} fixed (dry run)")
-        return 0
-    fixed = sum(1 for r in outcome.steps if r.success)
-    for result in outcome.steps:
-        if result.success:
-            print(f"  {result.file}:{result.line} OK")
+    vendors = getattr(args, "vendors", None) or [getattr(args, "vendor", "github")]
+    languages = getattr(args, "languages", None)
+    total_fixed = 0
+    total_steps = 0
+    has_errors = False
+    for vendor_slug in vendors:
+        try:
+            outcome = fix_directory(
+                settings,
+                root,
+                max_attempts=args.max_attempts,
+                dry_run=args.dry_run,
+                vendor_slug=vendor_slug,
+                languages=languages,
+            )
+        except ValueError as exc:
+            print(f"error [{vendor_slug}]: {exc}", file=sys.stderr)
+            has_errors = True
+            continue
+        if not outcome.had_impacts:
+            print(f"no impacted call sites for {vendor_slug}")
+            continue
+        if args.dry_run:
+            fixed_count = 0
+            for step in outcome.steps:
+                if not step["ok"]:
+                    print(f"  {step['file']}:{step['line']} FAILED: {step['err']}")
+                    continue
+                fixed_count += 1
+                print(f"  {step['file']}:{step['line']} OK")
+                print(_unified_diff(str(root / step["file"]), step["before"], step["after"]))
+            print(f"{fixed_count}/{len(outcome.steps)} fixed for {vendor_slug} (dry run)")
+            total_fixed += fixed_count
+            total_steps += len(outcome.steps)
         else:
-            print(f"  {result.file}:{result.line} FAILED: {result.error}")
-    print(f"{fixed}/{len(outcome.steps)} fixed")
-    return 0
+            fixed = sum(1 for r in outcome.steps if r.success)
+            for result in outcome.steps:
+                if result.success:
+                    print(f"  {result.file}:{result.line} OK")
+                else:
+                    print(f"  {result.file}:{result.line} FAILED: {result.error}")
+            print(f"{fixed}/{len(outcome.steps)} fixed for {vendor_slug}")
+            total_fixed += fixed
+            total_steps += len(outcome.steps)
+    if len(vendors) > 1:
+        print(f"\ntotal: {total_fixed}/{total_steps} fixed across {len(vendors)} vendors")
+    return 2 if has_errors else 0
 
 
 def cmd_pr(args) -> int:
@@ -170,35 +202,49 @@ def cmd_pr(args) -> int:
     if not sep or not repo:
         print(f"error: expected OWNER/REPO, got {args.repo!r}", file=sys.stderr)
         return 2
-    try:
-        outcome = run_repo_pipeline(
-            settings,
-            owner,
-            repo,
-            base=args.base,
-            branch=args.branch,
-            local_dir=Path(args.dir) if args.dir else None,
-            max_attempts=args.max_attempts,
-            check_timeout=args.check_timeout,
-            merge=args.merge,
-            vendor_slug=getattr(args, "vendor", "github"),
-        )
-    except ValueError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
-    result = outcome.pr_result
-    if result is None:
-        print("no impacted call sites; nothing to do")
-        return 0
-    print(f"PR #{result.pr_number}: {result.pr_url}")
-    print(f"passed={result.passed} attempts={result.attempts}")
-    if result.failure:
-        print(f"last failure: {result.failure[:500]}")
-    if outcome.merged:
-        print("merged; fix branch deleted")
-    elif outcome.merge_error:
-        print(f"warning: merge rejected, PR left open: {outcome.merge_error}")
-    return 0 if result.passed else 1
+    vendors = getattr(args, "vendors", None) or [getattr(args, "vendor", "github")]
+    languages = getattr(args, "languages", None)
+    any_passed = False
+    any_failed = False
+    for vendor_slug in vendors:
+        try:
+            outcome = run_repo_pipeline(
+                settings,
+                owner,
+                repo,
+                base=args.base,
+                branch=args.branch,
+                local_dir=Path(args.dir) if args.dir else None,
+                max_attempts=args.max_attempts,
+                check_timeout=args.check_timeout,
+                merge=args.merge,
+                vendor_slug=vendor_slug,
+                languages=languages,
+            )
+        except ValueError as exc:
+            print(f"error [{vendor_slug}]: {exc}", file=sys.stderr)
+            any_failed = True
+            continue
+        result = outcome.pr_result
+        if result is None:
+            print(f"no impacted call sites for {vendor_slug}; nothing to do")
+            continue
+        print(f"[{vendor_slug}] PR #{result.pr_number}: {result.pr_url}")
+        print(f"passed={result.passed} attempts={result.attempts}")
+        if result.failure:
+            print(f"last failure: {result.failure[:500]}")
+        if outcome.merged:
+            print("merged; fix branch deleted")
+            any_passed = True
+        elif outcome.merge_error:
+            print(f"warning: merge rejected, PR left open: {outcome.merge_error}")
+        if result.passed:
+            any_passed = True
+        else:
+            any_failed = True
+    if any_failed and not any_passed:
+        return 1
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -37,6 +37,46 @@ BUILTIN_VENDORS: dict[str, Vendor] = {
             "typed client methods over raw HTTP calls when migrating."
         ),
     ),
+    "slack": Vendor(
+        slug="slack",
+        name="Slack",
+        spec_url="https://raw.githubusercontent.com/slackapi/slack-api-specs/master/web-api/slack_web_api_openapi.json",
+        fix_guidance=(
+            "Slack's Web API uses token-based auth and method-based routing. "
+            "Migrate deprecated methods to their replacement endpoints. "
+            "Prefer the official Slack SDKs over raw HTTP calls."
+        ),
+    ),
+    "aws": Vendor(
+        slug="aws",
+        name="AWS",
+        spec_url="https://raw.githubusercontent.com/awslabs/smithy/main/smithy-aws-protocol-tests/main/resources/airy-aws/restJson1.json",
+        fix_guidance=(
+            "AWS APIs use AWS SDKs with service-specific clients. "
+            "When endpoints change, update the SDK version and use the new "
+            "client methods. Avoid raw HTTP calls to AWS APIs."
+        ),
+    ),
+    "azure": Vendor(
+        slug="azure",
+        name="Azure",
+        spec_url="https://raw.githubusercontent.com/Azure/azure-rest-api-specs/main/specification/securityinsights/data-plane/Microsoft.SecurityInsights/stable/2024-01-01/SecurityInsights.json",
+        fix_guidance=(
+            "Azure APIs use Azure SDKs with service-specific clients. "
+            "When API versions change, update the SDK and use the new "
+            "client methods. Prefer Azure SDK over raw HTTP calls."
+        ),
+    ),
+    "google_cloud": Vendor(
+        slug="google_cloud",
+        name="Google Cloud",
+        spec_url="https://raw.githubusercontent.com/googleapis/googleapis/main/google/cloud/secretmanager/v1/secretmanager_v1.json",
+        fix_guidance=(
+            "Google Cloud APIs use Google Cloud client libraries. "
+            "When APIs change, update the client library version. "
+            "Prefer the official Google Cloud SDKs over raw HTTP calls."
+        ),
+    ),
 }
 
 

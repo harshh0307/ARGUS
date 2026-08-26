@@ -78,7 +78,7 @@ def test_list_vendors():
     response = client.get("/api/v1/vendors")
     assert response.status_code == 200
     slugs = {item["slug"] for item in response.json()}
-    assert slugs == {"github", "stripe", "twilio"}
+    assert slugs == {"github", "stripe", "twilio", "slack", "aws", "azure", "google_cloud"}
     github = next(item for item in response.json() if item["slug"] == "github")
     assert github["poll_interval_seconds"] == 21600
 

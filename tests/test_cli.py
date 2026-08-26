@@ -121,7 +121,7 @@ def test_fix_dry_run_prints_diff(monkeypatch, tmp_path, capsys):
     assert "OK" in out
     assert "requests.get('/repos/x/tags/protection')" in out
     assert target.read_text().startswith("import requests\nresp = requests.get")
-    assert "1/1 fixed (dry run)" in out
+    assert "1/1 fixed for github (dry run)" in out
 
 
 def test_fix_applies_in_directory(monkeypatch, tmp_path):

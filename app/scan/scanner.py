@@ -8,6 +8,26 @@ from app.scan.models import Usage
 HTTP_METHODS = ("get", "post", "put", "patch", "delete", "head", "options")
 
 JS_SUFFIXES = (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx")
+GO_SUFFIXES = (".go",)
+RUBY_SUFFIXES = (".rb",)
+JAVA_SUFFIXES = (".java",)
+PHP_SUFFIXES = (".php",)
+CS_SUFFIXES = (".cs",)
+
+ALL_SUFFIXES: dict[str, tuple[str, ...]] = {
+    "py": (".py",),
+    "js": JS_SUFFIXES,
+    "go": GO_SUFFIXES,
+    "ruby": RUBY_SUFFIXES,
+    "java": JAVA_SUFFIXES,
+    "php": PHP_SUFFIXES,
+    "cs": CS_SUFFIXES,
+}
+
+ALL_EXTENSIONS: dict[str, str] = {}
+for _lang, _suffixes in ALL_SUFFIXES.items():
+    for _ext in _suffixes:
+        ALL_EXTENSIONS[_ext] = _lang
 
 CLIENT_CLASS_METHODS = {
     "client": frozenset(HTTP_METHODS),
@@ -44,13 +64,29 @@ def extract_path(url: str, base_url: str) -> str | None:
 
 
 def language_for_file(path: str) -> str:
-    return "js" if Path(path).suffix.lower() in JS_SUFFIXES else "py"
+    suffix = Path(path).suffix.lower()
+    return ALL_EXTENSIONS.get(suffix, "py")
 
 
 class ApiScanner:
-    def __init__(self, base_url: str, ignore_dirs: set[str] | None = None):
+    def __init__(
+        self,
+        base_url: str,
+        ignore_dirs: set[str] | None = None,
+        languages: set[str] | None = None,
+    ):
         self.base_url = base_url.rstrip("/")
         self.ignore_dirs = ignore_dirs or {".git", ".venv", "__pycache__", "node_modules", ".tox"}
+        # None means scan all languages
+        self.languages: set[str] | None = languages
+
+    def _should_scan(self, suffix: str) -> bool:
+        lang = ALL_EXTENSIONS.get(suffix)
+        if lang is None:
+            return False
+        if self.languages is None:
+            return True
+        return lang in self.languages
 
     def scan(self, root: str | Path) -> list[Usage]:
         usages: list[Usage] = []
@@ -59,7 +95,7 @@ class ApiScanner:
             if path.is_dir() or self._ignored(path):
                 continue
             suffix = path.suffix.lower()
-            if suffix != ".py" and suffix not in JS_SUFFIXES:
+            if not self._should_scan(suffix):
                 continue
             rel = path.relative_to(root_path).as_posix()
             usages.extend(self._scan_file(path, rel))
@@ -71,6 +107,27 @@ class ApiScanner:
             from app.scan.js_scanner import JsScanner
 
             return JsScanner(base_url=self.base_url).scan_source(source, filename)
+        if language == "go":
+            from app.scan.go_scanner import GoScanner
+
+            return GoScanner(base_url=self.base_url).scan_source(source, filename)
+        if language == "ruby":
+            from app.scan.ruby_scanner import RubyScanner
+
+            return RubyScanner(base_url=self.base_url).scan_source(source, filename)
+        if language == "java":
+            from app.scan.java_scanner import JavaScanner
+
+            return JavaScanner(base_url=self.base_url).scan_source(source, filename)
+        if language == "php":
+            from app.scan.php_scanner import PhpScanner
+
+            return PhpScanner(base_url=self.base_url).scan_source(source, filename)
+        if language == "cs":
+            from app.scan.cs_scanner import CSharpScanner
+
+            return CSharpScanner(base_url=self.base_url).scan_source(source, filename)
+        # Python (default)
         try:
             tree = ast.parse(source, filename=filename)
         except SyntaxError:
