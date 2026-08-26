@@ -4,9 +4,12 @@ import hashlib
 import hmac
 import json
 import threading
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -25,6 +28,9 @@ from app.db.models import DetectionRun, Repository
 from app.db.repository import open_session, upsert_repository
 from app.registry.vendors import get_vendor, list_vendors
 from app.workers.celery_app import app as celery_app
+
+_templates_dir = Path(__file__).parent / "templates"
+_templates = Jinja2Templates(directory=str(_templates_dir))
 
 
 def _db_session(settings: Settings) -> Session:
@@ -342,6 +348,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return handler(payload, settings)
         except KeyError as exc:
             return WebhookOut(ok=True, event=event, dispatched=False, reason=f"malformed payload: missing {exc}")
+
+    # ── Dashboard routes ─────────────────────────────────────────────
+    from app.api.dashboard import router as dashboard_router
+
+    app.include_router(dashboard_router)
+
+    @app.get("/dashboard", response_class=HTMLResponse)
+    def dashboard_index_html(request: Request) -> HTMLResponse:
+        from app.api.dashboard import dashboard_index
+        data = dashboard_index(request, app.state.settings)
+        return _templates.TemplateResponse("index.html", {"request": request, **data})
+
+    @app.get("/dashboard/vendors", response_class=HTMLResponse)
+    def dashboard_vendors_html(request: Request) -> HTMLResponse:
+        from app.api.dashboard import dashboard_vendors
+        data = dashboard_vendors(request, app.state.settings)
+        return _templates.TemplateResponse("vendors.html", {"request": request, **data})
+
+    @app.get("/dashboard/activity", response_class=HTMLResponse)
+    def dashboard_activity_html(request: Request, days: int = 30) -> HTMLResponse:
+        from app.api.dashboard import dashboard_activity
+        data = dashboard_activity(request, app.state.settings, days=days)
+        return _templates.TemplateResponse("activity.html", {"request": request, **data})
+
+    @app.get("/dashboard/repositories", response_class=HTMLResponse)
+    def dashboard_repositories_html(request: Request) -> HTMLResponse:
+        from app.api.dashboard import dashboard_repositories
+        data = dashboard_repositories(request, app.state.settings)
+        return _templates.TemplateResponse("repositories.html", {"request": request, **data})
 
     return app
 

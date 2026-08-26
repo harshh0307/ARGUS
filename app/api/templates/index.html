@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+{% block title %}Argus Dashboard - Overview{% endblock %}
+
+{% block content %}
+<div class="mb-8">
+    <h1 class="text-2xl font-bold text-gray-800 mb-2">Dashboard Overview</h1>
+    <p class="text-gray-500">Monitor API changes, detection runs, and fix activity across your vendors.</p>
+</div>
+
+<!-- Stats Cards -->
+<div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+    <div class="stat-card bg-white rounded-lg shadow p-5">
+        <div class="text-sm text-gray-500 mb-1">Vendors Monitored</div>
+        <div class="text-3xl font-bold text-blue-600">{{ total_vendors }}</div>
+    </div>
+    <div class="stat-card bg-white rounded-lg shadow p-5">
+        <div class="text-sm text-gray-500 mb-1">Total Breaking Changes</div>
+        <div class="text-3xl font-bold text-red-600">{{ total_breaking }}</div>
+    </div>
+    <div class="stat-card bg-white rounded-lg shadow p-5">
+        <div class="text-sm text-gray-500 mb-1">Total Additive Changes</div>
+        <div class="text-3xl font-bold text-green-600">{{ total_additive }}</div>
+    </div>
+    <div class="stat-card bg-white rounded-lg shadow p-5">
+        <div class="text-sm text-gray-500 mb-1">Repositories</div>
+        <div class="text-3xl font-bold text-purple-600">{{ repositories|length }}</div>
+    </div>
+</div>
+
+<!-- Vendor Status -->
+<div class="bg-white rounded-lg shadow mb-8">
+    <div class="px-6 py-4 border-b border-gray-100 flex justify-between items-center">
+        <h2 class="font-semibold text-gray-800">Vendor Status</h2>
+        <a href="/dashboard/vendors" class="text-sm text-blue-600 hover:underline">View All</a>
+    </div>
+    <table class="w-full">
+        <thead class="bg-gray-50">
+            <tr>
+                <th class="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Vendor</th>
+                <th class="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Status</th>
+                <th class="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Total Runs</th>
+                <th class="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Last Breaking</th>
+                <th class="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Last Additive</th>
+                <th class="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Last Run</th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-100">
+            {% for v in vendors %}
+            <tr class="hover:bg-gray-50">
+                <td class="px-6 py-4">
+                    <div class="font-medium text-gray-800">{{ v.name }}</div>
+                    <div class="text-xs text-gray-400">{{ v.slug }}</div>
+                </td>
+                <td class="px-6 py-4">
+                    {% if v.enabled %}
+                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">Active</span>
+                    {% else %}
+                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">Disabled</span>
+                    {% endif %}
+                </td>
+                <td class="px-6 py-4 text-sm text-gray-600">{{ v.total_runs }}</td>
+                <td class="px-6 py-4">
+                    <span class="text-sm font-medium text-red-600">{{ v.last_breaking }}</span>
+                </td>
+                <td class="px-6 py-4">
+                    <span class="text-sm font-medium text-green-600">{{ v.last_additive }}</span>
+                </td>
+                <td class="px-6 py-4 text-sm text-gray-500">
+                    {% if v.last_run_at %}{{ v.last_run_at.strftime('%Y-%m-%d %H:%M') }}{% else %}Never{% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<!-- Recent Detection Runs -->
+<div class="bg-white rounded-lg shadow mb-8">
+    <div class="px-6 py-4 border-b border-gray-100">
+        <h2 class="font-semibold text-gray-800">Recent Detection Runs</h2>
+    </div>
+    {% if recent_runs %}
+    <table class="w-full">
+        <thead class="bg-gray-50">
+            <tr>
+                <th class="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">ID</th>
+                <th class="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Vendor</th>
+                <th class="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Breaking</th>
+                <th class="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Additive</th>
+                <th class="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Time</th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-100">
+            {% for r in recent_runs %}
+            <tr class="hover:bg-gray-50">
+                <td class="px-6 py-4 text-sm text-gray-600">#{{ r.id }}</td>
+                <td class="px-6 py-4">
+                    <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">{{ r.vendor_slug }}</span>
+                </td>
+                <td class="px-6 py-4">
+                    {% if r.breaking_count > 0 %}
+                    <span class="text-sm font-medium text-red-600">{{ r.breaking_count }}</span>
+                    {% else %}
+                    <span class="text-sm text-gray-400">0</span>
+                    {% endif %}
+                </td>
+                <td class="px-6 py-4">
+                    <span class="text-sm text-green-600">{{ r.additive_count }}</span>
+                </td>
+                <td class="px-6 py-4 text-sm text-gray-500">
+                    {% if r.created_at %}{{ r.created_at.strftime('%Y-%m-%d %H:%M') }}{% else %}N/A{% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="px-6 py-8 text-center text-gray-400">No detection runs yet. Run <code class="bg-gray-100 px-1 rounded">argus detect</code> to start.</div>
+    {% endif %}
+</div>
+
+<!-- Repositories -->
+<div class="bg-white rounded-lg shadow">
+    <div class="px-6 py-4 border-b border-gray-100 flex justify-between items-center">
+        <h2 class="font-semibold text-gray-800">Repositories</h2>
+        <a href="/dashboard/repositories" class="text-sm text-blue-600 hover:underline">View All</a>
+    </div>
+    {% if repositories %}
+    <table class="w-full">
+        <thead class="bg-gray-50">
+            <tr>
+                <th class="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Repository</th>
+                <th class="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Vendor</th>
+                <th class="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Status</th>
+                <th class="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Last Run</th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-100">
+            {% for r in repositories %}
+            <tr class="hover:bg-gray-50">
+                <td class="px-6 py-4">
+                    <div class="font-medium text-gray-800">{{ r.owner }}/{{ r.name }}</div>
+                </td>
+                <td class="px-6 py-4">
+                    <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">{{ r.vendor_slug }}</span>
+                </td>
+                <td class="px-6 py-4">
+                    {% if r.is_active %}
+                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">Active</span>
+                    {% else %}
+                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">Inactive</span>
+                    {% endif %}
+                </td>
+                <td class="px-6 py-4 text-sm text-gray-500">
+                    {% if r.last_run_at %}{{ r.last_run_at.strftime('%Y-%m-%d %H:%M') }}{% else %}Never{% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="px-6 py-8 text-center text-gray-400">No repositories registered yet. Use <code class="bg-gray-100 px-1 rounded">POST /api/v1/repositories</code> to add one.</div>
+    {% endif %}
+</div>
+{% endblock %}

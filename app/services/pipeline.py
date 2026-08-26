@@ -47,9 +47,15 @@ def _extract_tarball(data: bytes, dest: Path) -> None:
             tar.extractall(dest)
 
 
-def scan_changes(settings: Settings, vendor_slug: str, root: Path) -> list:
+def scan_changes(
+    settings: Settings,
+    vendor_slug: str,
+    root: Path,
+    languages: list[str] | None = None,
+) -> list:
     detection = detect_changes(settings, vendor_slug)
-    usages = ApiScanner(base_url=settings.api_base_url).scan(root)
+    lang_set = set(languages) if languages else None
+    usages = ApiScanner(base_url=settings.api_base_url, languages=lang_set).scan(root)
     return assess_impact(usages, detection["changes"])
 
 
@@ -68,9 +74,10 @@ def fix_directory(
     max_attempts: int | None = None,
     dry_run: bool = False,
     vendor_slug: str = "github",
+    languages: list[str] | None = None,
 ) -> PipelineOutcome:
     vendor_guidance = _vendor_guidance(settings, vendor_slug)
-    impacts = scan_changes(settings, vendor_slug, root)
+    impacts = scan_changes(settings, vendor_slug, root, languages=languages)
     outcome = PipelineOutcome(pr_result=None, impacts=impacts)
     if not impacts:
         return outcome
@@ -130,6 +137,7 @@ def run_repo_pipeline(
     pr_body_summary: str | None = None,
     pr_body_details: list[str] | None = None,
     vendor_slug: str = "github",
+    languages: list[str] | None = None,
 ) -> PipelineOutcome:
     vendor_guidance = _vendor_guidance(settings, vendor_slug)
     client = GitHubClient(token=settings.github_token)
@@ -146,7 +154,7 @@ def run_repo_pipeline(
             root.mkdir(parents=True)
             _extract_tarball(client.repo_tarball(owner, repo, base), root)
 
-        impacts = scan_changes(settings, vendor_slug, root)
+        impacts = scan_changes(settings, vendor_slug, root, languages=languages)
         outcome = PipelineOutcome(pr_result=None, impacts=impacts)
         if not impacts:
             return outcome
