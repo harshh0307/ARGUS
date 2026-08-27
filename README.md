@@ -7,7 +7,7 @@
 [![Python 3.14](https://img.shields.io/badge/python-3.14-blue)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Argus watches API vendors (Stripe, Twilio, GitHub...) by diffing their OpenAPI specs, scans your repositories for affected call sites, fixes them with an LLM agent, and opens a self-healing pull request.
+Argus watches API vendors (GitHub, Stripe, Twilio, Slack, AWS, Azure, Google Cloud) by diffing their OpenAPI specs, scans your repositories across 8 languages, fixes them with an LLM agent, and opens a self-healing pull request.
 
 > "API providers shouldn't just announce changes; they should apply them."
 > When an API ships a breaking change, an agent should scan customer codebases, identify affected usages, and open a PR with the fix — like Dependabot, but for APIs.
@@ -36,14 +36,14 @@ repo clone ─▶ AST usage scan ─▶ impact report ┤
 | Component | Status | Tech |
 |---|---|---|
 | Spec ingestion + snapshot store | ✅ | httpx, content-addressed JSON snapshots (SHA-256) |
-| Vendor registry (multi-vendor) | ✅ | github + stripe + twilio built-ins, `argus vendors` |
+| Vendor registry (multi-vendor) | ✅ | github, stripe, twilio, slack, aws, azure, google_cloud built-ins, `argus vendors` |
 | Postgres/SQLite persistence | ✅ | SQLAlchemy 2.0, psycopg; vendors, snapshots, detection runs |
 | Celery workers + Redis | ✅ | Celery 5.6, Redis broker/backend, beat polling, `scan_and_fix` tasks |
 | GitHub App auth (auto-refreshing install tokens) | ✅ | RS256 app JWT → installation access tokens, cached; PAT fallback |
 | FastAPI read API + webhook receiver | ✅ | read-only dashboards, HMAC-verified GitHub webhooks |
 | Real-time webhooks | ✅ | `push`, `installation`, `repository_dispatch` events → Celery dispatch (inline fallback) |
 | Semantic diff engine (breaking-change rules) | ✅ | normalized OpenAPI comparison |
-| AST usage scanner + impact report | ✅ | Python `ast` + JS/TS scanner (fetch/axios), constant folding, template path matching |
+| AST usage scanner + impact report | ✅ | Python, JS/TS, Go, Ruby, Java, PHP, C# scanner; constant folding, template path matching |
 | LangGraph fix agent (validate + retry) | ✅ | LangGraph, OpenAI-compatible LLMs |
 | Per-vendor fix agents | ✅ | vendor-specific guidance + model per vendor (`--vendor`) |
 | Semantic guard (no-op patch rejection) | ✅ | re-scans patched AST, rejects if removed endpoint still called |
@@ -51,7 +51,8 @@ repo clone ─▶ AST usage scan ─▶ impact report ┤
 | Merge-on-green (`--merge` flag) | ✅ | squash-merge when CI passes, branch cleanup |
 | GitHub PR client + CI feedback loop | ✅ | httpx (REST API), Actions job logs |
 | Changelog + semantic search | ✅ | embeddings (OpenAI-compatible) + pgvector-capable Postgres, `/api/v1/search/changelog` |
-| CLI + docker-compose | ✅ | argparse, Docker |
+| CLI + docker-compose | ✅ | argparse, Docker, `--languages` + `--vendors` flags |
+| Web dashboard | ✅ | TailwindCSS, Chart.js, vendor status, activity charts, repo list |
 | Full end-to-end demo (PR self-heal) | ✅ | `scripts/demo_pr.py` (verified live) |
 | Multi-vendor registry, workers, Postgres, API | ✅ | Celery + Redis, PostgreSQL, FastAPI |
 | AWS cloud deployment | ✅ | ECS Fargate, RDS, ElastiCache, Terraform, GitHub Actions CI/CD |
@@ -93,7 +94,15 @@ app/
 ├── core/          # settings (pydantic-settings, 12-factor config)
 ├── ingestion/     # fetch specs, snapshot versioning
 ├── detection/     # normalize + semantic diff + breaking-change rules
-├── scan/          # Python ast + JS/TS scanner, impact assessment
+├── scan/          # multi-language scanners (Python, JS/TS, Go, Ruby, Java, PHP, C#)
+│   ├── scanner.py      # main scanner with language dispatch
+│   ├── python_scanner.py  # Python ast + requests/httpx/aiohttp
+│   ├── js_scanner.py      # JS/TS fetch/axios/got/superagent/ky
+│   ├── go_scanner.py      # Go net/http, go-resty, echo/gin/mux
+│   ├── ruby_scanner.rb    # Ruby Net::HTTP, HTTParty, RestClient
+│   ├── java_scanner.py    # Java HttpClient, RestTemplate, Feign
+│   ├── php_scanner.py     # PHP Guzzle, Symfony, cURL, Laravel
+│   └── cs_scanner.py      # C# HttpClient, RestSharp, Refit
 ├── fix/           # LangGraph fix agent, patch engine, multi-provider LLM
 │   ├── agent.py       # LangGraph graph with guardrails
 │   ├── patch.py       # patch application + validation (unreachable code, throw-in-expression)
@@ -103,12 +112,15 @@ app/
 │   ├── cost_tracker.py # per-model cost tracking
 │   └── errors.py      # error classification (rate limit, timeout, etc.)
 ├── github/        # GitHub client, App token auth, CI logs, PR self-heal loop
-├── registry/      # vendor registry (github, stripe, twilio)
+├── registry/      # vendor registry (github, stripe, twilio, slack, aws, azure, google_cloud)
 ├── db/            # SQLAlchemy models + persistence layer
 ├── services/      # pipeline service layer (shared by CLI, workers, API)
 ├── search/        # changelog embeddings + cosine search
 ├── workers/       # Celery app + tasks
-├── api/           # FastAPI read API + webhook receiver
+├── api/           # FastAPI read API + webhook receiver + web dashboard
+│   ├── main.py         # FastAPI app with routes
+│   ├── dashboard.py    # dashboard endpoints (vendors, activity, repos)
+│   └── templates/      # HTML templates (TailwindCSS + Chart.js)
 └── cli.py         # argus detect/scan/fix/pr commands
 infra/terraform/   # AWS IaC (VPC, RDS, ElastiCache, ECS Fargate, ALB)
 .github/workflows/ # CI (tests+lint) + deploy (ECR → terraform → ECS)
@@ -117,7 +129,7 @@ scripts/
 ├── check_deprecated.py  # check deprecated API endpoints
 ├── test_hmac.py   # test HMAC webhook signature
 └── aws/           # upload-secrets.ps1 (SSM Parameter Store)
-tests/             # pytest suite (513 tests)
+tests/             # pytest suite (567 tests)
 ```
 
 ## Setup
@@ -151,13 +163,16 @@ Copy-Item .env.example .env
 ## Usage
 
 ```powershell
-argus vendors               # list registered spec vendors (github, stripe, twilio)
+argus vendors               # list registered spec vendors (7 total)
 argus detect                # diff pinned old spec vs. current -> breaking/additive changes
 argus detect --vendor stripe  # run detection for another vendor
-argus scan [DIR]            # scan a repo (Python + JS/TS) for call sites hit by breaking changes
+argus detect --vendors github stripe  # detect for multiple vendors
+argus scan [DIR]            # scan a repo for call sites hit by breaking changes
+argus scan [DIR] --languages py go ruby java php cs  # scan only specific languages
 argus fix [DIR] --vendor github  # apply LLM fixes in place (--dry-run to preview diffs)
 argus pr OWNER/REPO --vendor github  # full loop: detect, scan, fix, open PR, self-heal on CI failure
 argus pr OWNER/REPO --merge  # same, but squash-merge when CI passes
+argus pr OWNER/REPO --languages py js --vendors github stripe  # multi-language, multi-vendor
 ```
 
 ### Celery workers
@@ -187,6 +202,10 @@ uvicorn app.api.main:app --host 0.0.0.0 --port 8000
 | `GET /api/v1/installations` | GitHub App installations (owner, active state) recorded from webhooks |
 | `GET /api/v1/search/changelog?q=...&vendor=...&limit=...` | semantic search across detected changes (embeddings via `EMBEDDING_*`, keyword fallback; every `argus detect` batch-embeds new changes) |
 | `POST /api/v1/webhook` | GitHub webhook receiver; HMAC-verified (needs `WEBHOOK_SECRET`). Events: `push` and `repository_dispatch` → `scan_and_fix` for registered repos; `installation` → upserts install rows. Malformed payloads return 200 with error reason (no crash) |
+| `GET /dashboard` | Web dashboard overview (vendor status, breaking/additive stats, recent runs) |
+| `GET /dashboard/vendors` | Vendor detail pages with run history |
+| `GET /dashboard/activity` | Activity chart (Chart.js stacked bar, changes over time) |
+| `GET /dashboard/repositories` | Registered repositories list |
 
 Point `https://your.host/webhook` at the repo's GitHub webhook with content type `application/json` and a secret matching `WEBHOOK_SECRET`.
 
@@ -267,11 +286,33 @@ The fix agent includes comprehensive guardrails to prevent bad patches:
 - `const`/`let`/`var` constant resolution
 - `.ts`, `.tsx`, `.jsx`, `.mjs`, `.cjs` support
 
+### Go
+- `net/http` (`http.Get`, `http.Post`, `client.Do`)
+- `go-resty` (`resty.R().Get`)
+- Echo/Gin/Mux framework routes (`c.Param`, `c.Query`, `mux.Vars`)
+
+### Ruby
+- `Net::HTTP`, `HTTParty`, `RestClient`
+- `Typhoeus`, `HTTP` gem
+
+### Java
+- `HttpClient`, `RestTemplate`, `Unirest`
+- Apache `HttpClient`, Feign, `WebClient`
+
+### PHP
+- Guzzle, Symfony HttpClient
+- cURL (`curl_init`), `file_get_contents`
+- WordPress (`wp_remote_get`), Laravel (`Http::get`)
+
+### C#
+- `HttpClient`, `RestSharp`, `Refit`
+- ASP.NET Minimal API
+
 ## How it works (detailed)
 
 1. **Ingestion** — fetch the vendor's OpenAPI spec with retries/backoff and ETag caching; store each version content-addressed (filename = SHA-256 digest), so history is immutable and deduplicated.
 2. **Detection** — normalize both specs (strip descriptions, sort, keep only semantics), then apply rules: endpoint removed, parameter removed/required/type-changed, response code removed = `breaking`; new endpoints = `additive`.
-3. **Impact** — scan each file: `ast` for Python; a dedicated tokenizer for JS/TS. Resolve variable-assigned URLs via constant folding, match call sites against spec path templates, and join with breaking changes. Query strings and fragments are stripped during path extraction.
+3. **Impact** — scan each file: `ast` for Python, dedicated tokenizer for JS/TS, Go, Ruby, Java, PHP, C#. Resolve variable-assigned URLs via constant folding, match call sites against spec path templates, and join with breaking changes. Query strings and fragments are stripped during path extraction. Use `--languages` to limit which languages are scanned.
 4. **Fix agent** — a LangGraph agent reads the impact report, proposes a patch, applies it, validates syntax (Python, JS, TS, TSX, JSX), checks for unreachable code and throw-in-expression patterns, and retries up to `FIX_MAX_ATTEMPTS` times. The LLM is any OpenAI-compatible endpoint with free-tier fallback on 429.
 5. **Semantic guard** — after syntax validation, the agent re-scans the patched content with the AST scanner. If the removed endpoint is still called, the patch is rejected and the agent retries with the error as context.
 6. **PR + CI self-heal** — Argus pushes the fixed files to a branch, opens a PR, and polls the check runs. On failure it extracts the error from the Actions job log, posts it as a PR comment, and re-runs the agent with the error as context — until CI is green or attempts run out.
@@ -313,6 +354,7 @@ curl "http://127.0.0.1:8000/api/v1/search/changelog?q=transfer%20repository"
 - **Phase 3:** AWS deployment — ECS Fargate, RDS, ElastiCache, S3, Terraform, GitHub Actions CI/CD ✅
 - **Phase 4:** JS/TS scanning ✅, per-vendor agents ✅, real-time webhooks ✅, pgvector changelog search ✅
 - **Phase 5:** Guardrails ✅, error handling ✅, edge case fixes ✅, full end-to-end verification ✅
+- **Phase 6:** Multi-language scanners (Go, Ruby, Java, PHP, C#) ✅, multi-vendor CLI flags ✅, 7 vendors ✅, web dashboard ✅, 567 tests ✅
 
 ## AWS deployment
 
@@ -353,7 +395,7 @@ terraform -chdir=infra/terraform-free destroy -var="ssh_cidr=<your-ip>/32" -auto
 
 ## Known limits
 
-- Python scanning covers `requests`/`httpx` style calls, `requests.request()` dynamic calls, and async clients. JS/TS covers `fetch`, `axios`, `got`, `superagent`, and `ky`
+- Python scanning covers `requests`/`httpx` style calls, `requests.request()` dynamic calls, and async clients. JS/TS covers `fetch`, `axios`, `got`, `superagent`, and `ky`. Go covers `net/http`, `go-resty`, and framework routes. Ruby covers `Net::HTTP`, `HTTParty`, `RestClient`, `Typhoeus`. Java covers `HttpClient`, `RestTemplate`, `Unirest`, Apache, Feign. PHP covers Guzzle, Symfony, cURL, WordPress, Laravel. C# covers `HttpClient`, `RestSharp`, `Refit`.
 - Response-body usage analysis not yet supported
 - GitHub App private key must be kept secret; classic PATs work as a simpler fallback
 - Free-tier LLMs may produce no-op patches; the semantic guard catches these but adds latency
