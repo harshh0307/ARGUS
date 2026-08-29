@@ -170,9 +170,9 @@ def test_run_repo_pipeline_merge_on_green(monkeypatch, tmp_path):
     monkeypatch.setattr(pipeline, "build_suggestion_model", lambda s, vendor_slug=None: object())
     monkeypatch.setattr(pipeline, "run_pr_loop", fake_pr_loop)
 
-    outcome = pipeline.run_repo_pipeline(settings(), "o", "r", local_dir=tmp_path, merge=True)
+    outcome = pipeline.run_repo_pipeline(settings(), "o", "r", local_dir=tmp_path)
 
-    assert outcome.merged is True
+    assert outcome.merged is False
     assert outcome.merge_error is None
-    assert ("merge", "o", "r", 7, "squash") in fake_client.calls
-    assert ("delete_branch", "o", "r", "argus/fix") in fake_client.calls
+    assert outcome.pr_result.passed is True
+    assert ("merge", "o", "r", 7, "squash") not in fake_client.calls

@@ -70,7 +70,7 @@ def _verify_signature(secret: str, signature: str | None, body: bytes) -> bool:
     return hmac.compare_digest(signature, f"sha256={digest}")
 
 
-def _dispatch_scan_and_fix(repository_id: int, merge: bool = True) -> bool:
+def _dispatch_scan_and_fix(repository_id: int, merge: bool = False) -> bool:
     """Enqueue the celery task; if the broker is unreachable, fall back to an
     inline run in a daemon thread so self-hosted setups without Redis still work."""
     try:

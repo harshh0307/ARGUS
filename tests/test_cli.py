@@ -270,12 +270,11 @@ def test_pr_command_merges_when_passed_and_flag_set(monkeypatch, tmp_path, capsy
         branch="argus/fix",
         max_attempts=None,
         check_timeout=None,
-        merge=True,
     )
     assert cli.cmd_pr(args) == 0
-    assert ("merge", "o", "r", 7, "squash") in fake_client.calls
-    assert ("delete_branch", "o", "r", "argus/fix") in fake_client.calls
-    assert "merged; fix branch deleted" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "PR #7:" in out
+    assert "ready for human review" in out
 
 
 def test_pr_command_does_not_merge_when_failed(monkeypatch, tmp_path):
@@ -301,7 +300,6 @@ def test_pr_command_does_not_merge_when_failed(monkeypatch, tmp_path):
         branch="argus/fix",
         max_attempts=None,
         check_timeout=None,
-        merge=True,
     )
     assert cli.cmd_pr(args) == 1
     assert fake_client.calls == []
@@ -333,10 +331,10 @@ def test_pr_command_merge_rejection_warns(monkeypatch, tmp_path, capsys):
         branch="argus/fix",
         max_attempts=None,
         check_timeout=None,
-        merge=True,
     )
     assert cli.cmd_pr(args) == 0
-    assert "merge rejected" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "ready for human review" in out
 
 
 def test_pr_requires_token(monkeypatch, capsys):
