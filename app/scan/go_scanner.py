@@ -81,7 +81,7 @@ class GoScanner:
                 usages.append(Usage(filename, line, method, path))
 
         for match in _HTTP_NEW_REQUEST.finditer(source):
-            args_start = match.end()
+            args_start = match.start()
             parts = self._extract_func_args(source, args_start)
             if len(parts) < 2:
                 continue
