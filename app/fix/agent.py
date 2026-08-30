@@ -54,6 +54,7 @@ class FixState(TypedDict, total=False):
     attempts: int
     language: str
     vendor_guidance: str | None
+    new_spec_context: str | None
     # Guardrail fields
     patch_history: list[str]
     error_history: list[str]
@@ -116,6 +117,22 @@ class SuggestionModel:
             self._fallback = ChatOpenAI(**fkwargs).with_structured_output(PatchSuggestion)
         return self._fallback
 
+    def _extract_usage(self, result, model: str) -> None:
+        """Extract real token counts from LangChain response and record them."""
+        input_tokens = 0
+        output_tokens = 0
+        meta = getattr(result, "response_metadata", {}) or {}
+        usage = meta.get("token_usage", {}) or meta.get("usage", {}) or {}
+        if usage:
+            input_tokens = usage.get("prompt_tokens", 0) or usage.get("input_tokens", 0) or 0
+            output_tokens = usage.get("completion_tokens", 0) or usage.get("output_tokens", 0) or 0
+        else:
+            usage_meta = getattr(result, "usage_metadata", None)
+            if usage_meta:
+                input_tokens = getattr(usage_meta, "input_tokens", 0) or 0
+                output_tokens = getattr(usage_meta, "output_tokens", 0) or 0
+        self.cost_tracker.record(input_tokens, output_tokens, model)
+
     def suggest(self, prompt: str) -> PatchSuggestion:
         """Call LLM with retry, fallback, and timeout."""
         max_retries = 3
@@ -125,7 +142,7 @@ class SuggestionModel:
         for attempt in range(max_retries):
             try:
                 result = self._get_llm().invoke(prompt)
-                self.cost_tracker.record(0, 0, self._model_name)  # Rough estimate
+                self._extract_usage(result, self._model_name)
                 return result
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
@@ -144,7 +161,7 @@ class SuggestionModel:
         for attempt in range(max_retries):
             try:
                 result = fallback.invoke(prompt)
-                self.cost_tracker.record(0, 0, self._fallback_model)
+                self._extract_usage(result, self._fallback_model)
                 return result
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
@@ -215,6 +232,7 @@ def build_fix_graph(
             state.get("error"),
             language=state.get("language", "py"),
             vendor_guidance=state.get("vendor_guidance"),
+            new_spec_context=state.get("new_spec_context"),
         )
 
         # Check if prompt fits in budget
@@ -312,11 +330,11 @@ def build_fix_graph(
 
 
 def _patch_signature(patch: PatchSuggestion | None) -> str | None:
-    """Create a signature for duplicate patch detection."""
     if patch is None:
         return None
     return json.dumps(
-        {"file": patch.file, "line": patch.line, "action": patch.action, "replacement": patch.replacement},
+        {"file": patch.file, "line": patch.line, "end_line": patch.end_line,
+         "action": patch.action, "replacement": patch.replacement, "content": patch.content},
         sort_keys=True,
     )
 
@@ -350,7 +368,7 @@ def _still_calls_error(
 ) -> str | None:
     if base_url is None or impact.get("change_kind") != "endpoint_removed":
         return None
-    usages = ApiScanner(base_url=base_url).scan_source(
+    usages, _headers = ApiScanner(base_url=base_url).scan_source(
         content, filename="patched", language=language
     )
     for usage in usages:
@@ -403,6 +421,7 @@ def fix_impact_on_content(
     max_attempts: int = 3,
     base_url: str | None = None,
     vendor_guidance: str | None = None,
+    new_spec_context: str | None = None,
 ) -> tuple[str | None, str | None]:
     graph = _get_or_build_graph(suggestion_model, max_attempts, base_url, _GRAPH_CACHE)
     final = _invoke_graph(
@@ -415,6 +434,7 @@ def fix_impact_on_content(
             "attempts": 0,
             "language": language_for_file(file_path),
             "vendor_guidance": vendor_guidance,
+            "new_spec_context": new_spec_context,
             "patch_history": [],
             "error_history": [],
         },
@@ -429,6 +449,7 @@ def run_fix(
     max_attempts: int = 3,
     base_url: str | None = None,
     vendor_guidance: str | None = None,
+    new_spec_context: str | None = None,
 ) -> list[FixResult]:
     graph = _get_or_build_graph(suggestion_model, max_attempts, base_url, _GRAPH_CACHE)
     contents: dict[str, str] = {}
@@ -447,6 +468,7 @@ def run_fix(
                 "attempts": 0,
                 "language": language_for_file(impact.usage.file),
                 "vendor_guidance": vendor_guidance,
+                "new_spec_context": new_spec_context,
                 "patch_history": [],
                 "error_history": [],
             },

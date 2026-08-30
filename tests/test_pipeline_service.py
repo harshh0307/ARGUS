@@ -30,7 +30,7 @@ class FakeScanner:
         self.usages = usages
 
     def scan(self, root):
-        return self.usages
+        return self.usages, []
 
 
 def settings(**overrides):

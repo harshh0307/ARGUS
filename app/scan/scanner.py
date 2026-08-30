@@ -3,7 +3,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from app.scan.models import Usage
+from app.scan.models import HeaderUsage, Usage
 
 HTTP_METHODS = ("get", "post", "put", "patch", "delete", "head", "options")
 
@@ -88,8 +88,9 @@ class ApiScanner:
             return True
         return lang in self.languages
 
-    def scan(self, root: str | Path) -> list[Usage]:
+    def scan(self, root: str | Path) -> tuple[list[Usage], list[HeaderUsage]]:
         usages: list[Usage] = []
+        headers: list[HeaderUsage] = []
         root_path = Path(root)
         for path in root_path.rglob("*"):
             if path.is_dir() or self._ignored(path):
@@ -98,53 +99,61 @@ class ApiScanner:
             if not self._should_scan(suffix):
                 continue
             rel = path.relative_to(root_path).as_posix()
-            usages.extend(self._scan_file(path, rel))
-        return sorted(usages, key=lambda u: (u.file, u.line, u.method, u.path))
+            file_usages, file_headers = self._scan_file(path, rel)
+            usages.extend(file_usages)
+            headers.extend(file_headers)
+        return sorted(usages, key=lambda u: (u.file, u.line, u.method, u.path)), sorted(headers, key=lambda h: (h.file, h.line, h.header_name))
 
-    def scan_source(self, source: str, filename: str = "<string>", language: str | None = None) -> list[Usage]:
+    def scan_source(self, source: str, filename: str = "<string>", language: str | None = None) -> tuple[list[Usage], list[HeaderUsage]]:
         language = language or language_for_file(filename)
         if language == "js":
             from app.scan.js_scanner import JsScanner
 
-            return JsScanner(base_url=self.base_url).scan_source(source, filename)
+            scanner = JsScanner(base_url=self.base_url)
+            return scanner.scan_source(source, filename), scanner.scan_headers(source, filename)
         if language == "go":
             from app.scan.go_scanner import GoScanner
 
-            return GoScanner(base_url=self.base_url).scan_source(source, filename)
+            scanner = GoScanner(base_url=self.base_url)
+            return scanner.scan_source(source, filename), scanner.scan_headers(source, filename)
         if language == "ruby":
             from app.scan.ruby_scanner import RubyScanner
 
-            return RubyScanner(base_url=self.base_url).scan_source(source, filename)
+            scanner = RubyScanner(base_url=self.base_url)
+            return scanner.scan_source(source, filename), scanner.scan_headers(source, filename)
         if language == "java":
             from app.scan.java_scanner import JavaScanner
 
-            return JavaScanner(base_url=self.base_url).scan_source(source, filename)
+            scanner = JavaScanner(base_url=self.base_url)
+            return scanner.scan_source(source, filename), scanner.scan_headers(source, filename)
         if language == "php":
             from app.scan.php_scanner import PhpScanner
 
-            return PhpScanner(base_url=self.base_url).scan_source(source, filename)
+            scanner = PhpScanner(base_url=self.base_url)
+            return scanner.scan_source(source, filename), scanner.scan_headers(source, filename)
         if language == "cs":
             from app.scan.cs_scanner import CSharpScanner
 
-            return CSharpScanner(base_url=self.base_url).scan_source(source, filename)
+            scanner = CSharpScanner(base_url=self.base_url)
+            return scanner.scan_source(source, filename), scanner.scan_headers(source, filename)
         # Python (default)
         try:
             tree = ast.parse(source, filename=filename)
         except SyntaxError:
-            return []
+            return [], []
         constants = self._module_constants(tree)
         visitor = _CallVisitor(filename, self.base_url, constants)
         visitor.visit(tree)
-        return visitor.usages
+        return visitor.usages, _scan_headers_python(source, filename)
 
     def scan_file(self, path: Path) -> list[Usage]:
         return self._scan_file(path, path)
 
-    def _scan_file(self, path: Path, filename: Path) -> list[Usage]:
+    def _scan_file(self, path: Path, filename: Path) -> tuple[list[Usage], list[HeaderUsage]]:
         try:
             source = path.read_text(encoding="utf-8-sig")
         except (OSError, UnicodeDecodeError):
-            return []
+            return [], []
         return self.scan_source(source, str(filename))
 
     def _ignored(self, path: Path) -> bool:
@@ -272,6 +281,11 @@ class _CallVisitor(ast.NodeVisitor):
                 else:
                     return None
             return "".join(parts)
+        if isinstance(arg, ast.BinOp) and isinstance(arg.op, ast.Add):
+            left = self._evaluate_url(arg.left)
+            right = self._evaluate_url(arg.right)
+            if left is not None and right is not None:
+                return left + right
         return None
 
     def _evaluate_method(self, node: ast.expr) -> str | None:
@@ -281,3 +295,43 @@ class _CallVisitor(ast.NodeVisitor):
             if method in HTTP_METHODS:
                 return method
         return None
+
+
+_AUTH_HEADERS = {
+    "authorization": "auth",
+    "x-api-key": "api_key",
+    "x-auth-token": "auth",
+    "api-key": "api_key",
+    "x-access-token": "auth",
+}
+
+
+def _scan_headers_python(source: str, filename: str) -> list[HeaderUsage]:
+    """Scan Python source for HTTP header assignments."""
+    import re
+
+    headers: list[HeaderUsage] = []
+    lines = source.splitlines()
+    header_re = re.compile(
+        r"""['"]?(Authorization|X-Api-Key|X-Auth-Token|Api-Key|X-Access-Token|"""
+        r"""Content-Type|Accept|X-GitHub-Api-Version|Stripe-Version|"""
+        r"""X-Twilio-Authorization|Bearer|X-Request-Id)['"]?\s*[:=]""",
+        re.IGNORECASE,
+    )
+    bearer_re = re.compile(r"""['"]Bearer\s+['"]""", re.IGNORECASE)
+    auth_header_re = re.compile(
+        r"""headers\s*=\s*\{[^}]*['"](\w[\w-]*)['"]""",
+        re.IGNORECASE,
+    )
+    for i, line in enumerate(lines, 1):
+        for m in header_re.finditer(line):
+            name = m.group(1)
+            ctx = _AUTH_HEADERS.get(name.lower(), "header")
+            headers.append(HeaderUsage(filename, i, name, None, ctx))
+        if bearer_re.search(line):
+            headers.append(HeaderUsage(filename, i, "Authorization", "Bearer", "bearer"))
+        for m in auth_header_re.finditer(line):
+            name = m.group(1)
+            if name.lower() not in {h.lower() for h in _AUTH_HEADERS}:
+                headers.append(HeaderUsage(filename, i, name, None, "header"))
+    return headers

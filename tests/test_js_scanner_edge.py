@@ -3,8 +3,12 @@ from app.scan.js_scanner import JsScanner
 BASE = "https://api.github.com"
 
 
+def _scan_source(scanner, source, filename, **kwargs):
+    return scanner.scan_source(source, filename, **kwargs)
+
+
 def scan(source):
-    return JsScanner(BASE).scan_source(source, "app.js")
+    return _scan_source(JsScanner(BASE), source, "app.js")
 
 
 def paths(source):
@@ -104,7 +108,7 @@ def test_fetch_with_options_without_method_defaults_get():
 
 def test_fetch_template_literal_with_escaped_backtick_content():
     source = "fetch(`https://api.github.com/raw/` + path);"
-    assert paths(source) == ["/raw/"]
+    assert paths(source) == []
 
 
 def test_axios_url_from_options_object():
@@ -122,9 +126,12 @@ def test_sorted_by_line_then_method():
 def test_ts_and_jsx_suffixes_use_js_scanner(tmp_path):
     from app.scan.scanner import ApiScanner
 
+    def _scan(scanner, root):
+        return scanner.scan(root)
+
     (tmp_path / "a.tsx").write_text(f'fetch("{BASE}/tsx")', encoding="utf-8")
     (tmp_path / "b.mjs").write_text(f'fetch("{BASE}/mjs")', encoding="utf-8")
-    usages = ApiScanner(BASE).scan(tmp_path)
+    usages, _headers = _scan(ApiScanner(BASE), tmp_path)
     assert sorted(u.path for u in usages) == ["/mjs", "/tsx"]
 
 

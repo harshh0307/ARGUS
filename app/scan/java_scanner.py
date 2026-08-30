@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from app.scan.models import Usage
+from app.scan.models import HeaderUsage, Usage
 from app.scan.scanner import extract_path
 
 JAVA_METHODS = ("get", "post", "put", "patch", "delete", "head", "options")
@@ -151,6 +151,43 @@ class JavaScanner:
                     usages.append(Usage(filename, line, method, path))
                     seen_lines.add(line)
 
+        # HttpClient.send(request, bodyHandler)
+        for match in _HTTP_CLIENT_SEND.finditer(source):
+            url = self._extract_next_string(source, match.end())
+            if url is None:
+                continue
+            url = self._resolve_url(url, constants)
+            path = extract_path(url, self.base_url)
+            if path is not None:
+                line = source.count("\n", 0, match.start()) + 1
+                if line not in seen_lines:
+                    usages.append(Usage(filename, line, "get", path))
+                    seen_lines.add(line)
+
+        # HttpRequest.newBuilder().uri(URI.create("url"))
+        for match in _HTTP_REQUEST.finditer(source):
+            url = self._extract_next_string(source, match.end())
+            if url is None:
+                continue
+            url = self._resolve_url(url, constants)
+            path = extract_path(url, self.base_url)
+            if path is not None:
+                line = source.count("\n", 0, match.start()) + 1
+                if line not in seen_lines:
+                    usages.append(Usage(filename, line, "get", path))
+                    seen_lines.add(line)
+
+        # OkHttp .url("path")
+        for match in _OK_HTTP_URL.finditer(source):
+            url = match.group(1)
+            url = self._resolve_url(url, constants)
+            path = extract_path(url, self.base_url)
+            if path is not None:
+                line = source.count("\n", 0, match.start()) + 1
+                if line not in seen_lines:
+                    usages.append(Usage(filename, line, "get", path))
+                    seen_lines.add(line)
+
         return sorted(usages, key=lambda u: (u.file, u.line, u.method, u.path))
 
     def _extract_constants(self, source: str) -> dict[str, str]:
@@ -175,11 +212,36 @@ class JavaScanner:
 
     def _resolve_url(self, url: str, constants: dict[str, str]) -> str:
         """Resolve a URL that might contain ${var} placeholders."""
+        if "+" in url:
+            resolved = self._eval_concat(url, constants)
+            if resolved is not None:
+                return resolved
         def _replace(m: re.Match) -> str:
             var = m.group(1)
             return constants.get(var, f"{{{var}}}")
 
         return re.sub(r"\$\{(\w+)\}", _replace, url)
+
+    def _eval_concat(self, expr: str, constants: dict[str, str]) -> str | None:
+        """Resolve string concatenation like '"/api" + basePath + "/users"'."""
+        parts = [p.strip() for p in expr.split("+")]
+        result = []
+        for part in parts:
+            if not part:
+                continue
+            m = _STRING_DOUBLE.match(part)
+            if m:
+                result.append(m.group(1))
+                continue
+            m = _IDENT.fullmatch(part)
+            if m:
+                val = constants.get(part)
+                if val is None:
+                    return None
+                result.append(val)
+                continue
+            return None
+        return "".join(result)
 
     @staticmethod
     def _rest_template_method(name: str) -> str | None:
@@ -207,3 +269,26 @@ class JavaScanner:
             "HttpOptions": "options",
         }
         return mapping.get(class_name, "get")
+
+    def scan_headers(self, source: str, filename: str = "<string>") -> list[HeaderUsage]:
+        headers: list[HeaderUsage] = []
+        lines = source.splitlines()
+        auth_re = re.compile(
+            r"""['"]?(Authorization|X-Api-Key|X-Auth-Token|Api-Key|X-Access-Token|"""
+            r"""X-GitHub-Api-Version|Stripe-Version)['"]?\s*[:=]""",
+            re.IGNORECASE,
+        )
+        header_set_re = re.compile(
+            r"""\.header\s*\(\s*["'](\w[\w-]*)["']""",
+        )
+        add_header_re = re.compile(
+            r"""\.addHeader\s*\(\s*["'](\w[\w-]*)["']""",
+        )
+        for i, line in enumerate(lines, 1):
+            for m in auth_re.finditer(line):
+                headers.append(HeaderUsage(filename, i, m.group(1), None, "header"))
+            for m in header_set_re.finditer(line):
+                headers.append(HeaderUsage(filename, i, m.group(1), None, "header"))
+            for m in add_header_re.finditer(line):
+                headers.append(HeaderUsage(filename, i, m.group(1), None, "header"))
+        return headers

@@ -52,24 +52,36 @@ class PatchValidator:
             if not patch.replacement:
                 errors.append("replacement is empty")
             else:
-                # 5. Replacement must actually change the line
-                original_line = lines[patch.line - 1].strip()
-                replacement = patch.replacement.strip()
-                if original_line == replacement:
-                    errors.append("replacement is identical to original line")
+                end = patch.end_line or patch.line
+                if end != patch.line:
+                    if not (1 <= end <= len(lines)):
+                        errors.append(f"end_line {end} out of range")
+                else:
+                    original_line = lines[patch.line - 1].strip()
+                    replacement = patch.replacement.strip()
+                    if original_line == replacement:
+                        errors.append("replacement is identical to original line")
 
-                # 6. Replacement shouldn't be wildly different length
-                original_len = len(lines[patch.line - 1])
-                replacement_len = len(patch.replacement)
-                if replacement_len > original_len * 5:
-                    errors.append(
-                        f"replacement is {replacement_len / original_len:.1f}x longer than original"
-                    )
+                    original_len = len(lines[patch.line - 1])
+                    replacement_len = len(patch.replacement)
+                    if replacement_len > original_len * 5:
+                        errors.append(
+                            f"replacement is {replacement_len / original_len:.1f}x longer than original"
+                        )
 
         elif patch.action == "remove":
-            # Removing the only line in a file is suspicious
-            if len(lines) == 1:
+            end = patch.end_line or patch.line
+            if end != patch.line:
+                if not (1 <= end <= len(lines)):
+                    errors.append(f"end_line {end} out of range")
+            elif len(lines) == 1:
                 errors.append("removing the only line in a file")
+
+        elif patch.action == "insert":
+            insert_text = patch.content or patch.replacement
+            if not insert_text:
+                errors.append("insert content is empty")
+
         else:
             errors.append(f"unknown action: {patch.action!r}")
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from app.scan.models import Usage
+from app.scan.models import HeaderUsage, Usage
 from app.scan.scanner import extract_path
 
 JS_METHODS = ("get", "post", "put", "patch", "delete", "head", "options")
@@ -110,6 +110,8 @@ class JsScanner:
 
     def _eval_url(self, raw: str, constants: dict[str, str]) -> str | None:
         value = raw.strip()
+        if "+" in value:
+            return self._eval_concat(value, constants)
         string_match = _STRING.match(value)
         if string_match:
             return string_match.group(2)
@@ -123,6 +125,35 @@ class JsScanner:
         if ident_match:
             return constants.get(ident_match.group(0))
         return None
+
+    def _eval_concat(self, expr: str, constants: dict[str, str]) -> str | None:
+        """Resolve string concatenation like '"/api" + BASE_URL + "/users"'."""
+        parts = [p.strip() for p in expr.split("+")]
+        result = []
+        for part in parts:
+            if not part:
+                continue
+            string_match = _STRING.match(part)
+            if string_match:
+                result.append(string_match.group(2))
+                continue
+            template_match = _TEMPLATE.match(part)
+            if template_match:
+                resolved = _TEMPLATE_VAR.sub(
+                    lambda m: constants.get(m.group(1), f"{{{m.group(1)}}}"),
+                    template_match.group(1),
+                )
+                result.append(resolved)
+                continue
+            ident_match = _IDENT.fullmatch(part)
+            if ident_match:
+                val = constants.get(ident_match.group(0))
+                if val is None:
+                    return None
+                result.append(val)
+                continue
+            return None
+        return "".join(result)
 
     def _options_method(self, options: str | None) -> str | None:
         if not options:
@@ -139,6 +170,28 @@ class JsScanner:
             r"""['"]?url['"]?\s*:\s*(['"`])(.*?)\1""", options, re.DOTALL
         )
         return match.group(2) if match else None
+
+    def scan_headers(self, source: str, filename: str = "<string>") -> list[HeaderUsage]:
+        headers: list[HeaderUsage] = []
+        lines = source.splitlines()
+        auth_re = re.compile(
+            r"""['"]?(Authorization|X-Api-Key|X-Auth-Token|Api-Key|X-Access-Token|"""
+            r"""X-GitHub-Api-Version|Stripe-Version)['"]?\s*[:=]""",
+            re.IGNORECASE,
+        )
+        bearer_re = re.compile(r"""['"]Bearer\s+['"]""")
+        header_obj_re = re.compile(
+            r"""headers\s*:\s*\{[^}]*['"](\w[\w-]*)['"]""",
+            re.IGNORECASE,
+        )
+        for i, line in enumerate(lines, 1):
+            for m in auth_re.finditer(line):
+                headers.append(HeaderUsage(filename, i, m.group(1), None, "header"))
+            if bearer_re.search(line):
+                headers.append(HeaderUsage(filename, i, "Authorization", "Bearer", "bearer"))
+            for m in header_obj_re.finditer(line):
+                headers.append(HeaderUsage(filename, i, m.group(1), None, "header"))
+        return headers
 
 
 def _iter_calls(source: str):

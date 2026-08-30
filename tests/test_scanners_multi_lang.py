@@ -13,6 +13,11 @@ def _scanner(languages: set[str] | None = None) -> ApiScanner:
     return ApiScanner(base_url=BASE, languages=languages)
 
 
+def _scan(scanner: ApiScanner, source: str, filename: str) -> list:
+    usages, _headers = scanner.scan_source(source, filename)
+    return usages
+
+
 # ── Language detection ──────────────────────────────────────────────
 
 
@@ -54,7 +59,7 @@ class TestGoScanner:
     def test_http_get(self) -> None:
         s = _scanner()
         src = 'resp, err := http.Get("https://api.github.com/repos/{owner}/{repo}")'
-        usages = s.scan_source(src, "main.go")
+        usages = _scan(s, src, "main.go")
         assert len(usages) == 1
         assert usages[0].method == "get"
         assert usages[0].path == "/repos/{owner}/{repo}"
@@ -62,7 +67,7 @@ class TestGoScanner:
     def test_http_post(self) -> None:
         s = _scanner()
         src = 'resp, err := http.Post("https://api.github.com/repos/{owner}/{repo}", "application/json", body)'
-        usages = s.scan_source(src, "main.go")
+        usages = _scan(s, src, "main.go")
         assert len(usages) == 1
         assert usages[0].method == "post"
 
@@ -72,14 +77,14 @@ class TestGoScanner:
     def test_resty_get(self) -> None:
         s = _scanner()
         src = 'resp, err := client.R().Get("https://api.github.com/repos/{owner}/{repo}")'
-        usages = s.scan_source(src, "main.go")
+        usages = _scan(s, src, "main.go")
         assert len(usages) == 1
         assert usages[0].method == "get"
 
     def test_echo_route(self) -> None:
         s = _scanner()
         src = 'e.GET("/repos/:owner/:repo", handler)'
-        usages = s.scan_source(src, "main.go")
+        usages = _scan(s, src, "main.go")
         assert len(usages) == 1
         assert usages[0].method == "get"
         assert usages[0].path == "/repos/:owner/:repo"
@@ -87,7 +92,7 @@ class TestGoScanner:
     def test_gin_route(self) -> None:
         s = _scanner()
         src = 'r.GET("/repos/:owner/:repo", handler)'
-        usages = s.scan_source(src, "main.go")
+        usages = _scan(s, src, "main.go")
         assert len(usages) == 1
         assert usages[0].method == "get"
 
@@ -97,7 +102,7 @@ class TestGoScanner:
 const BaseURL = "https://api.github.com"
 resp, err := http.Get(BaseURL + "/repos/{owner}/{repo}")
 '''
-        s.scan_source(src, "main.go")
+        _scan(s, src, "main.go")
         # The URL is concatenated, so it won't start with / or base_url
         # This is expected - we can't resolve concatenation
 
@@ -109,7 +114,7 @@ class TestRubyScanner:
     def test_net_http_get(self) -> None:
         s = _scanner()
         src = 'response = Net::HTTP.get(URI("https://api.github.com/repos/{owner}/{repo}"))'
-        usages = s.scan_source(src, "app.rb")
+        usages = _scan(s, src, "app.rb")
         assert len(usages) == 1
         assert usages[0].method == "get"
         assert usages[0].path == "/repos/{owner}/{repo}"
@@ -117,14 +122,14 @@ class TestRubyScanner:
     def test_net_http_post(self) -> None:
         s = _scanner()
         src = 'response = Net::HTTP.post(URI("https://api.github.com/repos/{owner}/{repo}"), data)'
-        usages = s.scan_source(src, "app.rb")
+        usages = _scan(s, src, "app.rb")
         assert len(usages) == 1
         assert usages[0].method == "post"
 
     def test_httparty_get(self) -> None:
         s = _scanner()
         src = 'response = HTTParty.get("https://api.github.com/repos/{owner}/{repo}")'
-        usages = s.scan_source(src, "app.rb")
+        usages = _scan(s, src, "app.rb")
         assert len(usages) == 1
         assert usages[0].method == "get"
         assert usages[0].path == "/repos/{owner}/{repo}"
@@ -132,21 +137,21 @@ class TestRubyScanner:
     def test_restclient_get(self) -> None:
         s = _scanner()
         src = 'response = RestClient.get("https://api.github.com/repos/{owner}/{repo}")'
-        usages = s.scan_source(src, "app.rb")
+        usages = _scan(s, src, "app.rb")
         assert len(usages) == 1
         assert usages[0].method == "get"
 
     def test_typhoeus_get(self) -> None:
         s = _scanner()
         src = 'response = Typhoeus.get("https://api.github.com/repos/{owner}/{repo}")'
-        usages = s.scan_source(src, "app.rb")
+        usages = _scan(s, src, "app.rb")
         assert len(usages) == 1
         assert usages[0].method == "get"
 
     def test_http_gem_get(self) -> None:
         s = _scanner()
         src = 'response = HTTP.get("https://api.github.com/repos/{owner}/{repo}")'
-        usages = s.scan_source(src, "app.rb")
+        usages = _scan(s, src, "app.rb")
         assert len(usages) == 1
         assert usages[0].method == "get"
 
@@ -154,7 +159,7 @@ class TestRubyScanner:
         s = _scanner()
         src = '''BASE_URL = "https://api.github.com"
 response = HTTParty.get("#{BASE_URL}/repos/{owner}/{repo}")'''
-        usages = s.scan_source(src, "app.rb")
+        usages = _scan(s, src, "app.rb")
         assert len(usages) == 1
         assert usages[0].path == "/repos/{owner}/{repo}"
 
@@ -166,7 +171,7 @@ class TestJavaScanner:
     def test_rest_template_get(self) -> None:
         s = _scanner()
         src = 'restTemplate.getForObject("https://api.github.com/repos/{owner}/{repo}", String.class)'
-        usages = s.scan_source(src, "App.java")
+        usages = _scan(s, src, "App.java")
         assert len(usages) == 1
         assert usages[0].method == "get"
         assert usages[0].path == "/repos/{owner}/{repo}"
@@ -174,28 +179,28 @@ class TestJavaScanner:
     def test_rest_template_post(self) -> None:
         s = _scanner()
         src = 'restTemplate.postForEntity("https://api.github.com/repos/{owner}/{repo}", data, String.class)'
-        usages = s.scan_source(src, "App.java")
+        usages = _scan(s, src, "App.java")
         assert len(usages) == 1
         assert usages[0].method == "post"
 
     def test_unirest_get(self) -> None:
         s = _scanner()
         src = 'HttpResponse<String> response = Unirest.get("https://api.github.com/repos/{owner}/{repo}").asString();'
-        usages = s.scan_source(src, "App.java")
+        usages = _scan(s, src, "App.java")
         assert len(usages) == 1
         assert usages[0].method == "get"
 
     def test_apache_http_get(self) -> None:
         s = _scanner()
         src = 'HttpGet httpGet = new HttpGet("https://api.github.com/repos/{owner}/{repo}");'
-        usages = s.scan_source(src, "App.java")
+        usages = _scan(s, src, "App.java")
         assert len(usages) == 1
         assert usages[0].method == "get"
 
     def test_apache_http_post(self) -> None:
         s = _scanner()
         src = 'HttpPost httpPost = new HttpPost("https://api.github.com/repos/{owner}/{repo}");'
-        usages = s.scan_source(src, "App.java")
+        usages = _scan(s, src, "App.java")
         assert len(usages) == 1
         assert usages[0].method == "post"
 
@@ -208,14 +213,14 @@ interface GitHubClient {
     Response getRepo(@PathVariable String owner, @PathVariable String repo);
 }
 '''
-        s.scan_source(src, "App.java")
+        _scan(s, src, "App.java")
         # Feign annotations use @GetMapping, not @Get
         # Our regex looks for [Get("/path")] pattern
 
     def test_web_client_get(self) -> None:
         s = _scanner()
         src = 'webClient.get().uri("https://api.github.com/repos/{owner}/{repo}").retrieve().bodyToMono(String.class).block();'
-        usages = s.scan_source(src, "App.java")
+        usages = _scan(s, src, "App.java")
         assert len(usages) == 1
         assert usages[0].method == "get"
 
@@ -225,7 +230,7 @@ interface GitHubClient {
 private static final String BASE_URL = "https://api.github.com";
 restTemplate.getForObject(BASE_URL + "/repos/{owner}/{repo}", String.class);
 '''
-        s.scan_source(src, "App.java")
+        _scan(s, src, "App.java")
         # Constant concatenation won't resolve
         # This is expected
 
@@ -237,7 +242,7 @@ class TestPhpScanner:
     def test_guzzle_get(self) -> None:
         s = _scanner()
         src = '$response = $client->get("https://api.github.com/repos/{owner}/{repo}");'
-        usages = s.scan_source(src, "app.php")
+        usages = _scan(s, src, "app.php")
         assert len(usages) == 1
         assert usages[0].method == "get"
         assert usages[0].path == "/repos/{owner}/{repo}"
@@ -245,63 +250,63 @@ class TestPhpScanner:
     def test_guzzle_post(self) -> None:
         s = _scanner()
         src = '$response = $client->post("https://api.github.com/repos/{owner}/{repo}", ["json" => $data]);'
-        usages = s.scan_source(src, "app.php")
+        usages = _scan(s, src, "app.php")
         assert len(usages) == 1
         assert usages[0].method == "post"
 
     def test_guzzle_static_get(self) -> None:
         s = _scanner()
         src = '$response = GuzzleHttp::get("https://api.github.com/repos/{owner}/{repo}");'
-        usages = s.scan_source(src, "app.php")
+        usages = _scan(s, src, "app.php")
         assert len(usages) == 1
         assert usages[0].method == "get"
 
     def test_guzzle_request(self) -> None:
         s = _scanner()
         src = '$response = $client->request("GET", "https://api.github.com/repos/{owner}/{repo}");'
-        usages = s.scan_source(src, "app.php")
+        usages = _scan(s, src, "app.php")
         assert len(usages) == 1
         assert usages[0].method == "get"
 
     def test_symfony_client_get(self) -> None:
         s = _scanner()
         src = '$response = $client->get("https://api.github.com/repos/{owner}/{repo}");'
-        usages = s.scan_source(src, "app.php")
+        usages = _scan(s, src, "app.php")
         assert len(usages) == 1
         assert usages[0].method == "get"
 
     def test_file_get_contents(self) -> None:
         s = _scanner()
         src = '$data = file_get_contents("https://api.github.com/repos/{owner}/{repo}");'
-        usages = s.scan_source(src, "app.php")
+        usages = _scan(s, src, "app.php")
         assert len(usages) == 1
         assert usages[0].method == "get"
 
     def test_curl_setopt(self) -> None:
         s = _scanner()
         src = 'curl_setopt($ch, CURLOPT_URL, "https://api.github.com/repos/{owner}/{repo}");'
-        usages = s.scan_source(src, "app.php")
+        usages = _scan(s, src, "app.php")
         assert len(usages) == 1
         assert usages[0].method == "get"
 
     def test_wordpress_remote_get(self) -> None:
         s = _scanner()
         src = '$response = wp_remote_get("https://api.github.com/repos/{owner}/{repo}");'
-        usages = s.scan_source(src, "app.php")
+        usages = _scan(s, src, "app.php")
         assert len(usages) == 1
         assert usages[0].method == "get"
 
     def test_laravel_http_get(self) -> None:
         s = _scanner()
         src = '$response = Http::get("https://api.github.com/repos/{owner}/{repo}");'
-        usages = s.scan_source(src, "app.php")
+        usages = _scan(s, src, "app.php")
         assert len(usages) == 1
         assert usages[0].method == "get"
 
     def test_laravel_route(self) -> None:
         s = _scanner()
         src = 'Route::get("/repos/{owner}/{repo}", [RepoController::class, "show"]);'
-        usages = s.scan_source(src, "routes.php")
+        usages = _scan(s, src, "routes.php")
         assert len(usages) == 1
         assert usages[0].method == "get"
         assert usages[0].path == "/repos/{owner}/{repo}"
@@ -312,7 +317,7 @@ class TestPhpScanner:
 define('BASE_URL', 'https://api.github.com');
 $response = Http::get(BASE_URL . "/repos/{owner}/{repo}");
 '''
-        s.scan_source(src, "app.php")
+        _scan(s, src, "app.php")
         # Constant concatenation won't resolve
         # This is expected
 
@@ -322,7 +327,7 @@ $response = Http::get(BASE_URL . "/repos/{owner}/{repo}");
 $baseUrl = "https://api.github.com";
 $response = Http::get("{$baseUrl}/repos/{owner}/{repo}");
 '''
-        usages = s.scan_source(src, "app.php")
+        usages = _scan(s, src, "app.php")
         assert len(usages) == 1
         assert usages[0].path == "/repos/{owner}/{repo}"
 
@@ -334,7 +339,7 @@ class TestCSharpScanner:
     def test_http_client_get(self) -> None:
         s = _scanner()
         src = 'var response = await client.GetAsync("https://api.github.com/repos/{owner}/{repo}");'
-        usages = s.scan_source(src, "Program.cs")
+        usages = _scan(s, src, "Program.cs")
         assert len(usages) == 1
         assert usages[0].method == "get"
         assert usages[0].path == "/repos/{owner}/{repo}"
@@ -342,28 +347,28 @@ class TestCSharpScanner:
     def test_http_client_post(self) -> None:
         s = _scanner()
         src = 'var response = await client.PostAsync("https://api.github.com/repos/{owner}/{repo}", content);'
-        usages = s.scan_source(src, "Program.cs")
+        usages = _scan(s, src, "Program.cs")
         assert len(usages) == 1
         assert usages[0].method == "post"
 
     def test_http_client_static(self) -> None:
         s = _scanner()
         src = 'var response = await HttpClient.GetStringAsync("https://api.github.com/repos/{owner}/{repo}");'
-        usages = s.scan_source(src, "Program.cs")
+        usages = _scan(s, src, "Program.cs")
         assert len(usages) == 1
         assert usages[0].method == "get"
 
     def test_restsharp_get(self) -> None:
         s = _scanner()
         src = 'var response = await client.GetAsync("/repos/{owner}/{repo}");'
-        usages = s.scan_source(src, "Program.cs")
+        usages = _scan(s, src, "Program.cs")
         assert len(usages) == 1
         assert usages[0].method == "get"
 
     def test_restsharp_request(self) -> None:
         s = _scanner()
         src = 'var request = new RestRequest("/repos/{owner}/{repo}");'
-        usages = s.scan_source(src, "Program.cs")
+        usages = _scan(s, src, "Program.cs")
         assert len(usages) == 1
         assert usages[0].method == "get"
 
@@ -376,7 +381,7 @@ public interface IGitHubApi
     Task<Repo> GetRepo(string owner, string repo);
 }
 '''
-        usages = s.scan_source(src, "IGitHubApi.cs")
+        usages = _scan(s, src, "IGitHubApi.cs")
         assert len(usages) == 1
         assert usages[0].method == "get"
         assert usages[0].path == "/repos/{owner}/{repo}"
@@ -384,7 +389,7 @@ public interface IGitHubApi
     def test_minimal_api(self) -> None:
         s = _scanner()
         src = 'app.MapGet("/repos/{owner}/{repo}", handler);'
-        usages = s.scan_source(src, "Program.cs")
+        usages = _scan(s, src, "Program.cs")
         assert len(usages) == 1
         assert usages[0].method == "get"
         assert usages[0].path == "/repos/{owner}/{repo}"
@@ -392,7 +397,7 @@ public interface IGitHubApi
     def test_minimal_api_post(self) -> None:
         s = _scanner()
         src = 'app.MapPost("/repos/{owner}/{repo}", handler);'
-        usages = s.scan_source(src, "Program.cs")
+        usages = _scan(s, src, "Program.cs")
         assert len(usages) == 1
         assert usages[0].method == "post"
 
@@ -400,7 +405,7 @@ public interface IGitHubApi
         s = _scanner()
         src = '''private const string BaseUrl = "https://api.github.com";
 var response = await client.GetAsync(BaseUrl + "/repos/{owner}/{repo}");'''
-        s.scan_source(src, "Program.cs")
+        _scan(s, src, "Program.cs")
         # Constant concatenation doesn't resolve; this is expected
         # The string literal "/repos/{owner}/{repo}" won't start with / when concatenated
 

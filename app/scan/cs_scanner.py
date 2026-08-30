@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from app.scan.models import Usage
+from app.scan.models import HeaderUsage, Usage
 from app.scan.scanner import extract_path
 
 CS_METHODS = ("get", "post", "put", "patch", "delete", "head", "options")
@@ -201,11 +201,41 @@ class CSharpScanner:
 
     def _resolve_url(self, url: str, constants: dict[str, str]) -> str:
         """Resolve a URL that might contain ${constant} interpolation."""
+        if "+" in url:
+            resolved = self._eval_concat(url, constants)
+            if resolved is not None:
+                return resolved
         def _replace(m: re.Match) -> str:
             var = m.group(1)
             return constants.get(var, f"{{{var}}}")
 
         return _STRING_INTERPOLATION.sub(_replace, url)
+
+    def _eval_concat(self, expr: str, constants: dict[str, str]) -> str | None:
+        """Resolve string concatenation like '$"{BaseUrl}/api" + "/users"' or '"/api" + path + "/users"'."""
+        parts = [p.strip() for p in expr.split("+")]
+        result = []
+        for part in parts:
+            if not part:
+                continue
+            m = _STRING_DOUBLE.match(part)
+            if m:
+                inner = m.group(1)
+                inner = _STRING_INTERPOLATION.sub(
+                    lambda im: constants.get(im.group(1), f"{{{im.group(1)}}}"),
+                    inner,
+                )
+                result.append(inner)
+                continue
+            m = _IDENT.fullmatch(part)
+            if m:
+                val = constants.get(part)
+                if val is None:
+                    return None
+                result.append(val)
+                continue
+            return None
+        return "".join(result)
 
     @staticmethod
     def _normalize_method(name: str) -> str:
@@ -237,3 +267,26 @@ class CSharpScanner:
             "getobjectasync": "get",
         }
         return mapping.get(name, "get")
+
+    def scan_headers(self, source: str, filename: str = "<string>") -> list[HeaderUsage]:
+        headers: list[HeaderUsage] = []
+        lines = source.splitlines()
+        auth_re = re.compile(
+            r"""['"]?(Authorization|X-Api-Key|X-Auth-Token|Api-Key|X-Access-Token|"""
+            r"""X-GitHub-Api-Version|Stripe-Version)['"]?\s*[:=]""",
+            re.IGNORECASE,
+        )
+        header_add_re = re.compile(
+            r"""\.Headers\.Add\s*\(\s*["'](\w[\w-]*)["']""",
+        )
+        default_header_re = re.compile(
+            r"""DefaultRequestHeaders\.\w+\s*\(\s*["'](\w[\w-]*)["']""",
+        )
+        for i, line in enumerate(lines, 1):
+            for m in auth_re.finditer(line):
+                headers.append(HeaderUsage(filename, i, m.group(1), None, "header"))
+            for m in header_add_re.finditer(line):
+                headers.append(HeaderUsage(filename, i, m.group(1), None, "header"))
+            for m in default_header_re.finditer(line):
+                headers.append(HeaderUsage(filename, i, m.group(1), None, "header"))
+        return headers

@@ -57,7 +57,7 @@ class FakeScanner:
         self.usages = usages
 
     def scan(self, root):
-        return self.usages
+        return self.usages, []
 
 
 def test_parser_has_all_commands():

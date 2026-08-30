@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from app.core.config import Settings
 from app.detection.diff import diff_specs
-from app.detection.models import ADDITIVE, BREAKING
+from app.detection.models import ADDITIVE, BREAKING, DEPRECATION, WARNING
+from app.detection.ref_resolver import resolve_refs
 from app.ingestion.fetcher import SpecFetcher, SpecFetchError
 from app.ingestion.ingest import ingest
 from app.ingestion.snapshot_store import SnapshotStore
@@ -36,6 +37,8 @@ def run_detection(
                 "changes": [],
                 "breaking_count": 0,
                 "additive_count": 0,
+                "deprecation_count": 0,
+                "warning_count": 0,
                 "baselined": True,
             }
         old_digest = baseline["digest"]
@@ -48,7 +51,10 @@ def run_detection(
         raise SpecFetchError("current spec snapshot is missing")
     current = store.load(vendor_slug, latest["digest"])
 
-    changes = diff_specs(old["content"], current)
+    old_resolved = resolve_refs(old["content"])
+    current_resolved = resolve_refs(current)
+
+    changes = diff_specs(old_resolved, current_resolved)
     return {
         "vendor": vendor_slug,
         "old_digest": old_digest,
@@ -56,4 +62,6 @@ def run_detection(
         "changes": changes,
         "breaking_count": sum(1 for c in changes if c.severity == BREAKING),
         "additive_count": sum(1 for c in changes if c.severity == ADDITIVE),
+        "deprecation_count": sum(1 for c in changes if c.severity == DEPRECATION),
+        "warning_count": sum(1 for c in changes if c.severity == WARNING),
     }

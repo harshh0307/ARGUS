@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import time
+from urllib.parse import urlparse
 
 import httpx
+import yaml
 
 from app.core.config import Settings
 
@@ -12,9 +14,10 @@ class SpecFetchError(Exception):
 
 
 class FetchResult:
-    def __init__(self, content: dict, etag: str | None = None):
+    def __init__(self, content: dict, etag: str | None = None, spec_format: str = "json"):
         self.content = content
         self.etag = etag
+        self.spec_format = spec_format
 
 
 class SpecFetcher:
@@ -42,9 +45,30 @@ class SpecFetcher:
             if response.status_code == 304:
                 return None
             if response.status_code == 200:
-                return FetchResult(content=response.json(), etag=response.headers.get("ETag"))
+                content_type = response.headers.get("Content-Type", "")
+                spec_format = _detect_format(url, content_type)
+                content = _parse_response(response.text, spec_format)
+                return FetchResult(content=content, etag=response.headers.get("ETag"), spec_format=spec_format)
             if attempt == self.settings.http_max_retries - 1:
                 raise SpecFetchError(
                     f"unexpected status {response.status_code} for {url}"
                 )
         return None
+
+
+def _detect_format(url: str, content_type: str) -> str:
+    ct = content_type.lower()
+    if "yaml" in ct or "x-yaml" in ct:
+        return "yaml"
+    parsed = urlparse(url)
+    path = parsed.path.lower()
+    if path.endswith((".yaml", ".yml")):
+        return "yaml"
+    return "json"
+
+
+def _parse_response(text: str, spec_format: str) -> dict:
+    if spec_format == "yaml":
+        return yaml.safe_load(text)
+    import json
+    return json.loads(text)
