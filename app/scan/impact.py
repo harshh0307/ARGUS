@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.detection.models import BREAKING, Change
+from app.detection.models import BREAKING, DEPRECATION, Change
 from app.scan.models import Impact, Usage
 
 
@@ -8,7 +8,7 @@ def assess_impact(usages: list[Usage], changes: list[Change]) -> list[Impact]:
     impacts: list[Impact] = []
     for usage in usages:
         for change in changes:
-            if change.severity != BREAKING:
+            if change.severity not in (BREAKING, DEPRECATION):
                 continue
             if change.method == usage.method and match_path(usage.path, change.path):
                 impacts.append(Impact(usage, change))
@@ -24,6 +24,8 @@ def match_path(code_path: str, spec_path: str) -> bool:
         if spec_seg.startswith("{") and spec_seg.endswith("}"):
             continue
         if code_seg.startswith("{") and code_seg.endswith("}"):
+            if spec_seg.startswith("{") and spec_seg.endswith("}"):
+                continue
             return False
         if code_seg != spec_seg:
             return False

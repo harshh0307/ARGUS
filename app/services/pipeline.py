@@ -55,7 +55,7 @@ def scan_changes(
 ) -> list:
     detection = detect_changes(settings, vendor_slug)
     lang_set = set(languages) if languages else None
-    usages = ApiScanner(base_url=settings.api_base_url, languages=lang_set).scan(root)
+    usages, _headers = ApiScanner(base_url=settings.api_base_url, languages=lang_set).scan(root)
     return assess_impact(usages, detection["changes"])
 
 
@@ -201,15 +201,4 @@ def run_repo_pipeline(
             vendor_guidance=vendor_guidance,
         )
         outcome.pr_result = result
-        if result.passed and merge:
-            try:
-                client.merge_pull_request(owner, repo, result.pr_number)
-            except GitHubApiError as exc:
-                outcome.merge_error = str(exc)
-            else:
-                outcome.merged = True
-                try:
-                    client.delete_branch(owner, repo, branch)
-                except GitHubApiError:
-                    pass
         return outcome

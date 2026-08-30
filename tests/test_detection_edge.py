@@ -31,13 +31,13 @@ def test_normalize_skips_params_without_name():
 def test_normalize_param_without_location_gets_empty_string():
     operation = {"parameters": [{"name": "id", "schema": {"type": "string"}}]}
     normalized = normalize_spec({"paths": {"/a": {"get": operation}}})
-    assert normalized["get /a"]["parameters"] == [("", "id", False, "string")]
+    assert normalized["get /a"]["parameters"] == [("", "id", False, "string", False)]
 
 
 def test_normalize_schema_not_dict_yields_none_type():
     operation = {"parameters": [{"name": "id", "in": "query", "schema": "string"}]}
     normalized = normalize_spec({"paths": {"/a": {"get": operation}}})
-    assert normalized["get /a"]["parameters"] == [("query", "id", False, None)]
+    assert normalized["get /a"]["parameters"] == [("query", "id", False, None, False)]
 
 
 def test_normalize_sorts_parameters_by_location_then_name():
@@ -66,7 +66,7 @@ def test_normalize_extracts_responses_and_required():
         "responses": {"200": {}, "404": {}},
     }
     normalized = normalize_spec({"paths": {"/a": {"get": operation}}})
-    assert normalized["get /a"]["parameters"] == [("path", "id", True, "integer")]
+    assert normalized["get /a"]["parameters"] == [("path", "id", True, "integer", False)]
     assert normalized["get /a"]["responses"] == {"200", "404"}
 
 

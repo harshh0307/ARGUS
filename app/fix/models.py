@@ -7,8 +7,10 @@ from pydantic import BaseModel
 class PatchSuggestion(BaseModel):
     file: str
     line: int
-    action: Literal["replace", "remove"] = "replace"
+    action: Literal["replace", "remove", "insert"] = "replace"
     replacement: str = ""
+    end_line: int | None = None
+    content: str | None = None
 
 
 @dataclass(frozen=True)

@@ -14,6 +14,7 @@ class Vendor(BaseModel):
     enabled: bool = True
     fix_guidance: str | None = None
     fix_model: str | None = None
+    spec_format: str = "json"
 
 
 BUILTIN_VENDORS: dict[str, Vendor] = {
@@ -22,9 +23,13 @@ BUILTIN_VENDORS: dict[str, Vendor] = {
         name="Stripe",
         spec_url="https://raw.githubusercontent.com/stripe/openapi/master/openapi/spec3.json",
         fix_guidance=(
-            "Stripe migrates via API versioning: prefer the new version's "
-            "endpoints and payload shapes. List/object responses come from "
-            "stripe.api_key and typed Stripe SDK helpers when available."
+            "Stripe uses API versioning via the Stripe-Version header. "
+            "When migrating: (1) Update the API version in your Stripe config, "
+            "e.g. stripe.api_version = '2024-12-18'. (2) Endpoints rarely change; "
+            "the version header controls response shapes. (3) Use the official "
+            "Stripe SDK: stripe.Customer.create({...}) instead of raw HTTP. "
+            "Example migration: requests.post('https://api.stripe.com/v1/customers', ...) "
+            "-> stripe.Customer.create({...})"
         ),
     ),
     "twilio": Vendor(
@@ -32,9 +37,12 @@ BUILTIN_VENDORS: dict[str, Vendor] = {
         name="Twilio",
         spec_url="https://raw.githubusercontent.com/twilio/twilio-oai/main/spec/json/twilio_api_v2010.json",
         fix_guidance=(
-            "Twilio's API uses account SIDs and subresource URIs under "
-            "/2010-04-01/Accounts/{AccountSid}. Prefer the Twilio SDK's "
-            "typed client methods over raw HTTP calls when migrating."
+            "Twilio uses account SIDs in URI paths under /2010-04-01/Accounts/{AccountSid}. "
+            "When migrating: (1) Update the URI pattern if the endpoint changed. "
+            "(2) Use the Twilio helper library's typed methods: "
+            "client.messages.create(to=..., from_=..., body=...) instead of raw HTTP. "
+            "Example migration: requests.post(f'https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json', ...) "
+            "-> client.messages.create(to=..., from_=..., body=...)"
         ),
     ),
     "slack": Vendor(
@@ -42,9 +50,12 @@ BUILTIN_VENDORS: dict[str, Vendor] = {
         name="Slack",
         spec_url="https://raw.githubusercontent.com/slackapi/slack-api-specs/master/web-api/slack_web_api_openapi.json",
         fix_guidance=(
-            "Slack's Web API uses token-based auth and method-based routing. "
-            "Migrate deprecated methods to their replacement endpoints. "
-            "Prefer the official Slack SDKs over raw HTTP calls."
+            "Slack Web API uses method-based routing (POST to /method-name). "
+            "When migrating: (1) Update the method name in the POST body. "
+            "(2) Use the official Slack SDK: slack_sdk.WebClient(token=...).chat_postMessage(...) "
+            "instead of raw HTTP. "
+            "Example migration: requests.post('https://slack.com/api/chat.postMessage', json={...}) "
+            "-> client.chat_postMessage(channel=..., text=...)"
         ),
     ),
     "aws": Vendor(
@@ -52,9 +63,10 @@ BUILTIN_VENDORS: dict[str, Vendor] = {
         name="AWS",
         spec_url="https://raw.githubusercontent.com/awslabs/smithy/main/smithy-aws-protocol-tests/main/resources/airy-aws/restJson1.json",
         fix_guidance=(
-            "AWS APIs use AWS SDKs with service-specific clients. "
-            "When endpoints change, update the SDK version and use the new "
-            "client methods. Avoid raw HTTP calls to AWS APIs."
+            "Use the AWS SDK for Python (boto3) with service-specific clients. "
+            "When endpoints change: (1) Update boto3 version: pip install --upgrade boto3. "
+            "(2) Use the new client method: s3 = boto3.client('s3'); s3.get_object(...). "
+            "Avoid raw HTTP calls to AWS APIs."
         ),
     ),
     "azure": Vendor(
@@ -62,9 +74,11 @@ BUILTIN_VENDORS: dict[str, Vendor] = {
         name="Azure",
         spec_url="https://raw.githubusercontent.com/Azure/azure-rest-api-specs/main/specification/securityinsights/data-plane/Microsoft.SecurityInsights/stable/2024-01-01/SecurityInsights.json",
         fix_guidance=(
-            "Azure APIs use Azure SDKs with service-specific clients. "
-            "When API versions change, update the SDK and use the new "
-            "client methods. Prefer Azure SDK over raw HTTP calls."
+            "Use the Azure SDK for Python (azure-*) with service-specific clients. "
+            "When API versions change: (1) Update the api_version parameter. "
+            "(2) Use the new client method: client.get_incidents(...) instead of raw HTTP. "
+            "Example migration: requests.get('https://management.azure.com/...', headers={...}) "
+            "-> client.get_incidents(workspace_name=...)"
         ),
     ),
     "google_cloud": Vendor(
@@ -72,9 +86,10 @@ BUILTIN_VENDORS: dict[str, Vendor] = {
         name="Google Cloud",
         spec_url="https://raw.githubusercontent.com/googleapis/googleapis/main/google/cloud/secretmanager/v1/secretmanager_v1.json",
         fix_guidance=(
-            "Google Cloud APIs use Google Cloud client libraries. "
-            "When APIs change, update the client library version. "
-            "Prefer the official Google Cloud SDKs over raw HTTP calls."
+            "Use the Google Cloud client library (google-cloud-*). "
+            "When APIs change: (1) Update the client library: pip install --upgrade google-cloud-secretmanager. "
+            "(2) Use the new client method: client.access_secret_version(name=...). "
+            "Avoid raw HTTP calls to Google Cloud APIs."
         ),
     ),
 }
@@ -92,9 +107,14 @@ def get_vendor(settings: Settings, slug: str = "github") -> Vendor:
             spec_url=spec_url,
             old_spec_url=old_spec_url,
             fix_guidance=(
-                "GitHub REST API: some endpoints are removed in favor of "
-                "GraphQL or newer REST routes. If the endpoint was removed, "
-                "migrate to its documented replacement when one exists."
+                "GitHub REST API uses versioning via the Accept header "
+                "(X-GitHub-Api-Version: 2022-11-28). When migrating: "
+                "(1) Update the endpoint path if it changed. "
+                "(2) Use the requests library with the correct headers: "
+                "requests.get('https://api.github.com/...', headers={'Accept': 'application/vnd.github+json', "
+                "'X-GitHub-Api-Version': '2022-11-28'}). "
+                "(3) Consider using PyGithub for typed access: "
+                "from github import Github; g = Github(token); repo = g.get_repo('owner/repo')."
             ),
         )
     try:

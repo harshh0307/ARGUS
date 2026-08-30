@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from app.scan.models import Usage
+from app.scan.models import HeaderUsage, Usage
 from app.scan.scanner import extract_path
 
 GO_METHODS = ("get", "post", "put", "patch", "delete", "head", "options")
@@ -81,7 +81,7 @@ class GoScanner:
                 usages.append(Usage(filename, line, method, path))
 
         for match in _HTTP_NEW_REQUEST.finditer(source):
-            args_start = match.end()
+            args_start = match.start()
             parts = self._extract_func_args(source, args_start)
             if len(parts) < 2:
                 continue
@@ -220,6 +220,8 @@ class GoScanner:
     def _eval_string(self, raw: str, constants: dict[str, str]) -> str | None:
         """Evaluate a raw string literal, resolving constants."""
         raw = raw.strip()
+        if "+" in raw:
+            return self._eval_concat(raw, constants)
         # Check for string literal
         if raw and raw[0] in ('"', "'", "`"):
             return raw[1:-1] if len(raw) > 1 else None
@@ -232,6 +234,26 @@ class GoScanner:
             return constants[m.group(1)]
         return None
 
+    def _eval_concat(self, expr: str, constants: dict[str, str]) -> str | None:
+        """Resolve string concatenation like '"/api" + basePath + "/users"'."""
+        parts = [p.strip() for p in expr.split("+")]
+        result = []
+        for part in parts:
+            if not part:
+                continue
+            if part and part[0] in ('"', "'", "`"):
+                result.append(part[1:-1])
+                continue
+            if part in constants:
+                result.append(constants[part])
+                continue
+            m = _TEMPLATE_VAR.match(part)
+            if m and m.group(1) in constants:
+                result.append(constants[m.group(1)])
+                continue
+            return None
+        return "".join(result)
+
     def _resolve_value(self, url: str, constants: dict[str, str]) -> str:
         """Resolve a URL that might contain ${var} placeholders."""
         def _replace(m: re.Match) -> str:
@@ -239,3 +261,26 @@ class GoScanner:
             return constants.get(var, f"{{{var}}}")
 
         return _TEMPLATE_VAR.sub(_replace, url)
+
+    def scan_headers(self, source: str, filename: str = "<string>") -> list[HeaderUsage]:
+        headers: list[HeaderUsage] = []
+        lines = source.splitlines()
+        auth_re = re.compile(
+            r"""['"]?(Authorization|X-Api-Key|X-Auth-Token|Api-Key|X-Access-Token|"""
+            r"""X-GitHub-Api-Version|Stripe-Version)['"]?\s*[:=]""",
+            re.IGNORECASE,
+        )
+        header_set_re = re.compile(
+            r"""\.Header\.Set\s*\(\s*["'](\w[\w-]*)["']""",
+        )
+        header_add_re = re.compile(
+            r"""\.Header\.Add\s*\(\s*["'](\w[\w-]*)["']""",
+        )
+        for i, line in enumerate(lines, 1):
+            for m in auth_re.finditer(line):
+                headers.append(HeaderUsage(filename, i, m.group(1), None, "header"))
+            for m in header_set_re.finditer(line):
+                headers.append(HeaderUsage(filename, i, m.group(1), None, "header"))
+            for m in header_add_re.finditer(line):
+                headers.append(HeaderUsage(filename, i, m.group(1), None, "header"))
+        return headers

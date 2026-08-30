@@ -10,12 +10,30 @@ def apply_patch(content: str, patch: PatchSuggestion) -> tuple[str | None, str |
     lines = content.splitlines()
     if not (1 <= patch.line <= len(lines)):
         return None, f"line {patch.line} out of range (file has {len(lines)} lines)"
-    if patch.action == "remove":
-        del lines[patch.line - 1]
-    elif not patch.replacement:
-        return None, "replacement is empty"
+
+    if patch.action == "insert":
+        insert_text = patch.content or patch.replacement
+        if not insert_text:
+            return None, "insert content is empty"
+        insert_lines = insert_text.split("\n")
+        for i, line_text in enumerate(insert_lines):
+            lines.insert(patch.line - 1 + i, line_text)
+    elif patch.action == "remove":
+        end = patch.end_line or patch.line
+        if not (1 <= end <= len(lines)):
+            return None, f"end_line {end} out of range (file has {len(lines)} lines)"
+        del lines[patch.line - 1 : end]
+    elif patch.action == "replace":
+        end = patch.end_line or patch.line
+        if not (1 <= end <= len(lines)):
+            return None, f"end_line {end} out of range (file has {len(lines)} lines)"
+        if not patch.replacement:
+            return None, "replacement is empty"
+        replace_lines = patch.replacement.split("\n")
+        lines[patch.line - 1 : end] = replace_lines
     else:
-        lines[patch.line - 1] = patch.replacement
+        return None, f"unknown action: {patch.action}"
+
     new_content = "\n".join(lines)
     if content.endswith("\n"):
         new_content += "\n"

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from app.scan.models import Usage
+from app.scan.models import HeaderUsage, Usage
 from app.scan.scanner import extract_path
 
 RUBY_METHODS = ("get", "post", "put", "patch", "delete", "head", "options")
@@ -174,6 +174,38 @@ class RubyScanner:
                     usages.append(Usage(filename, line, method, path))
                     seen_lines.add(line)
 
+        # RestClient::Request.execute(method: :get, url: "...")
+        for match in _RESTCLIENT_REQUEST.finditer(source):
+            after_open = match.end()
+            method = self._extract_kwarg(source, after_open, "method")
+            url = self._extract_kwarg(source, after_open, "url")
+            if method:
+                method = method.lower().lstrip(":")
+            if url and method and method in RUBY_METHODS:
+                url = self._resolve_url(url, constants)
+                path = extract_path(url, self.base_url)
+                if path is not None:
+                    line = source.count("\n", 0, match.start()) + 1
+                    if line not in seen_lines:
+                        usages.append(Usage(filename, line, method, path))
+                        seen_lines.add(line)
+
+        # Faraday.get/post patterns
+        for match in _FARADAY_CALL.finditer(source):
+            method = match.group(2).lower()
+            if method not in RUBY_METHODS:
+                continue
+            url = self._extract_next_string(source, match.end())
+            if url is None:
+                continue
+            url = self._resolve_url(url, constants)
+            path = extract_path(url, self.base_url)
+            if path is not None:
+                line = source.count("\n", 0, match.start()) + 1
+                if line not in seen_lines:
+                    usages.append(Usage(filename, line, method, path))
+                    seen_lines.add(line)
+
         return sorted(usages, key=lambda u: (u.file, u.line, u.method, u.path))
 
     def _extract_constants(self, source: str) -> dict[str, str]:
@@ -220,8 +252,67 @@ class RubyScanner:
 
     def _resolve_url(self, url: str, constants: dict[str, str]) -> str:
         """Resolve a URL that might contain #{constant} interpolation."""
+        if "+" in url:
+            resolved = self._eval_concat(url, constants)
+            if resolved is not None:
+                return resolved
         def _replace(m: re.Match) -> str:
             var = m.group(1)
             return constants.get(var, f"{{{var}}}")
 
         return _INTERPOLATION.sub(_replace, url)
+
+    def _eval_concat(self, expr: str, constants: dict[str, str]) -> str | None:
+        """Resolve string concatenation like '"/api" + path + "/users"'."""
+        parts = [p.strip() for p in expr.split("+")]
+        result = []
+        for part in parts:
+            if not part:
+                continue
+            m = _STRING_DOUBLE.match(part)
+            if m:
+                result.append(m.group(1))
+                continue
+            m = _STRING_SINGLE.match(part)
+            if m:
+                result.append(m.group(1))
+                continue
+            m = _IDENT.fullmatch(part)
+            if m:
+                val = constants.get(part)
+                if val is None:
+                    return None
+                result.append(val)
+                continue
+            return None
+        return "".join(result)
+
+    def _extract_kwarg(self, source: str, start: int, key: str) -> str | None:
+        """Extract a keyword argument value like `method: :get` or `url: "path"`."""
+        kw_re = re.compile(rf"""{key}\s*:\s*(:?\w+|['"].*?['"])""")
+        m = kw_re.search(source, start)
+        if not m:
+            return None
+        val = m.group(1).strip()
+        val = val.removeprefix(":")
+        if val and val[0] in ('"', "'"):
+            val = val[1:-1]
+        return val
+
+    def scan_headers(self, source: str, filename: str = "<string>") -> list[HeaderUsage]:
+        headers: list[HeaderUsage] = []
+        lines = source.splitlines()
+        auth_re = re.compile(
+            r"""['"]?(Authorization|X-Api-Key|X-Auth-Token|Api-Key|X-Access-Token|"""
+            r"""X-GitHub-Api-Version|Stripe-Version)['"]?\s*[:=]""",
+            re.IGNORECASE,
+        )
+        header_bracket_re = re.compile(
+            r"""\[['"](\w[\w-]*)['"]\]\s*=""",
+        )
+        for i, line in enumerate(lines, 1):
+            for m in auth_re.finditer(line):
+                headers.append(HeaderUsage(filename, i, m.group(1), None, "header"))
+            for m in header_bracket_re.finditer(line):
+                headers.append(HeaderUsage(filename, i, m.group(1), None, "header"))
+        return headers

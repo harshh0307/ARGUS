@@ -19,5 +19,5 @@ def ingest(
     result = fetcher.fetch(vendor.spec_url)
     if result is None:
         return {"status": "unchanged", "vendor": vendor_slug, "digest": None}
-    digest = store.save(vendor_slug, result.content, etag=result.etag)
+    digest = store.save(vendor_slug, result.content, etag=result.etag, spec_format=result.spec_format)
     return {"status": "stored", "vendor": vendor_slug, "digest": digest}

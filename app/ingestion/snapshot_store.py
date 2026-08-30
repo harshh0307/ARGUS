@@ -9,7 +9,7 @@ class SnapshotStore:
     def __init__(self, root: str | Path):
         self.root = Path(root)
 
-    def save(self, vendor: str, content: dict, etag: str | None = None) -> str:
+    def save(self, vendor: str, content: dict, etag: str | None = None, spec_format: str = "json") -> str:
         vendor_dir = self.root / vendor
         vendor_dir.mkdir(parents=True, exist_ok=True)
         digest = hashlib.sha256(
@@ -19,7 +19,7 @@ class SnapshotStore:
         if not path.exists():
             path.write_text(json.dumps(content, indent=2), encoding="utf-8")
         (vendor_dir / "latest.json").write_text(
-            json.dumps({"digest": digest, "etag": etag}), encoding="utf-8"
+            json.dumps({"digest": digest, "etag": etag, "format": spec_format}), encoding="utf-8"
         )
         return digest
 

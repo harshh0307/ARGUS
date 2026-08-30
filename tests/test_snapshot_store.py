@@ -6,7 +6,7 @@ def test_save_load_roundtrip(tmp_path):
     digest = store.save("github", {"paths": {}}, etag='"abc"')
 
     assert store.load("github", digest) == {"paths": {}}
-    assert store.latest("github") == {"digest": digest, "etag": '"abc"'}
+    assert store.latest("github") == {"digest": digest, "etag": '"abc"', "format": "json"}
 
 
 def test_same_content_does_not_duplicate(tmp_path):

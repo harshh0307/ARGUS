@@ -4,6 +4,16 @@ from app.scan.scanner import ApiScanner, extract_path, language_for_file
 BASE = "https://api.github.com"
 
 
+def _scan(scanner, root):
+    usages, _headers = scanner.scan(root)
+    return usages
+
+
+def _scan_source(scanner, source, filename, **kwargs):
+    usages, _headers = scanner.scan_source(source, filename, **kwargs)
+    return usages
+
+
 def test_extract_path_strips_base_prefix():
     assert extract_path("https://api.github.com/users", BASE) == "/users"
     assert extract_path("/users", BASE) == "/users"
@@ -40,11 +50,11 @@ def test_language_for_file():
 
 
 def test_scan_empty_directory(tmp_path):
-    assert ApiScanner(BASE).scan(tmp_path) == []
+    assert _scan(ApiScanner(BASE), tmp_path) == []
 
 
 def test_scan_missing_directory(tmp_path):
-    assert ApiScanner(BASE).scan(tmp_path / "nope") == []
+    assert _scan(ApiScanner(BASE), tmp_path / "nope") == []
 
 
 def test_scan_custom_ignore_dirs(tmp_path):
@@ -56,7 +66,7 @@ def test_scan_custom_ignore_dirs(tmp_path):
     (tmp_path / "keep" / "b.py").write_text(
         f'import requests; requests.get("{BASE}/shown")', encoding="utf-8"
     )
-    usages = ApiScanner(BASE, ignore_dirs={"skipme"}).scan(tmp_path)
+    usages = _scan(ApiScanner(BASE, ignore_dirs={"skipme"}), tmp_path)
     assert [u.path for u in usages] == ["/shown"]
 
 
@@ -65,7 +75,7 @@ def test_scan_fstring_with_two_constants(tmp_path):
         f'API = "{BASE}"\nPATH = "/users"\nget(f"{{API}}{{PATH}}")',
         encoding="utf-8",
     )
-    usages = ApiScanner(BASE).scan(tmp_path)
+    usages = _scan(ApiScanner(BASE), tmp_path)
     assert [u.path for u in usages] == ["/users"]
     assert usages[0].method == "get"
 
@@ -75,7 +85,7 @@ def test_scan_fstring_attribute_formatted_value_skipped(tmp_path):
         f'class C:\n    base = "{BASE}"\n\nget(f"{{C.base}}/users")',
         encoding="utf-8",
     )
-    assert ApiScanner(BASE).scan(tmp_path) == []
+    assert _scan(ApiScanner(BASE), tmp_path) == []
 
 
 def test_scan_fstring_nested_expression_skipped(tmp_path):
@@ -83,12 +93,12 @@ def test_scan_fstring_nested_expression_skipped(tmp_path):
         'get(f"{build_url()}/users")',
         encoding="utf-8",
     )
-    assert ApiScanner(BASE).scan(tmp_path) == []
+    assert _scan(ApiScanner(BASE), tmp_path) == []
 
 
 def test_scan_call_without_arguments_skipped(tmp_path):
     (tmp_path / "a.py").write_text("get()\npost()\n", encoding="utf-8")
-    assert ApiScanner(BASE).scan(tmp_path) == []
+    assert _scan(ApiScanner(BASE), tmp_path) == []
 
 
 def test_scan_head_and_options_methods(tmp_path):
@@ -96,7 +106,7 @@ def test_scan_head_and_options_methods(tmp_path):
         f'head("{BASE}/health")\noptions("{BASE}/meta")',
         encoding="utf-8",
     )
-    usages = ApiScanner(BASE).scan(tmp_path)
+    usages = _scan(ApiScanner(BASE), tmp_path)
     assert [(u.method, u.path) for u in usages] == [
         ("head", "/health"),
         ("options", "/meta"),
@@ -108,7 +118,7 @@ def test_scan_attribute_client_calls(tmp_path):
         f'client = requests.Session()\nclient.delete("{BASE}/users/1")',
         encoding="utf-8",
     )
-    usages = ApiScanner(BASE).scan(tmp_path)
+    usages = _scan(ApiScanner(BASE), tmp_path)
     assert [(u.method, u.path) for u in usages] == [("delete", "/users/1")]
 
 
@@ -117,7 +127,7 @@ def test_scan_chained_assignment_constants(tmp_path):
         f'A = B = "{BASE}"\nget(f"{{B}}/users")',
         encoding="utf-8",
     )
-    assert [u.path for u in ApiScanner(BASE).scan(tmp_path)] == ["/users"]
+    assert [u.path for u in _scan(ApiScanner(BASE), tmp_path)] == ["/users"]
 
 
 def test_scan_uppercase_extension_file(tmp_path):
@@ -125,12 +135,12 @@ def test_scan_uppercase_extension_file(tmp_path):
         f'get("{BASE}/upper")',
         encoding="utf-8",
     )
-    assert [u.path for u in ApiScanner(BASE).scan(tmp_path)] == ["/upper"]
+    assert [u.path for u in _scan(ApiScanner(BASE), tmp_path)] == ["/upper"]
 
 
 def test_scan_binary_file_is_skipped(tmp_path):
     (tmp_path / "bin.py").write_bytes(b"\xff\xfe\x00\x01 garbage")
-    assert ApiScanner(BASE).scan(tmp_path) == []
+    assert _scan(ApiScanner(BASE), tmp_path) == []
 
 
 def test_scan_relative_file_paths(tmp_path):
@@ -139,20 +149,20 @@ def test_scan_relative_file_paths(tmp_path):
         f'get("{BASE}/nested")',
         encoding="utf-8",
     )
-    usages = ApiScanner(BASE).scan(tmp_path)
+    usages = _scan(ApiScanner(BASE), tmp_path)
     assert usages[0].file == "pkg/mod.py"
     assert usages[0].line == 1
 
 
 def test_scan_source_language_override_js(tmp_path):
     source = f'fetch("{BASE}/from-js")'
-    usages = ApiScanner(BASE).scan_source(source, "x.txt", language="js")
+    usages = _scan_source(ApiScanner(BASE), source, "x.txt", language="js")
     assert [u.path for u in usages] == ["/from-js"]
 
 
 def test_scan_source_language_override_py_for_js_file(tmp_path):
     source = f'const x = fetch("{BASE}/x");'
-    assert ApiScanner(BASE).scan_source(source, "x.js", language="py") == []
+    assert _scan_source(ApiScanner(BASE), source, "x.js", language="py") == []
 
 
 def test_scan_results_sorted_by_file_line_method_path(tmp_path):
@@ -164,7 +174,7 @@ def test_scan_results_sorted_by_file_line_method_path(tmp_path):
         f'get("{BASE}/m")',
         encoding="utf-8",
     )
-    usages = ApiScanner(BASE).scan(tmp_path)
+    usages = _scan(ApiScanner(BASE), tmp_path)
     keys = [(u.file, u.line, u.method, u.path) for u in usages]
     assert keys == sorted(keys)
     assert keys == [
@@ -179,12 +189,12 @@ def test_scan_non_http_url_ignored(tmp_path):
         'get("ftp://example.com/x")\nget("https://other.example.com/y")',
         encoding="utf-8",
     )
-    assert ApiScanner(BASE).scan(tmp_path) == []
+    assert _scan(ApiScanner(BASE), tmp_path) == []
 
 
 def test_scan_file_with_syntax_error_skipped(tmp_path):
     (tmp_path / "a.py").write_text("def broken(:\n", encoding="utf-8")
-    assert ApiScanner(BASE).scan(tmp_path) == []
+    assert _scan(ApiScanner(BASE), tmp_path) == []
 
 
 def test_scan_fstring_constant_defined_after_use(tmp_path):
@@ -192,7 +202,7 @@ def test_scan_fstring_constant_defined_after_use(tmp_path):
         'get(f"{API}/users")\nAPI = "https://api.github.com"',
         encoding="utf-8",
     )
-    usages = ApiScanner(BASE).scan(tmp_path)
+    usages = _scan(ApiScanner(BASE), tmp_path)
     assert [u.path for u in usages] == ["/users"]
 
 
@@ -204,9 +214,9 @@ def test_scan_ignores_venv_and_git(tmp_path):
             encoding="utf-8",
         )
     (tmp_path / "real.py").write_text(f'get("{BASE}/kept")', encoding="utf-8")
-    assert [u.path for u in ApiScanner(BASE).scan(tmp_path)] == ["/kept"]
+    assert [u.path for u in _scan(ApiScanner(BASE), tmp_path)] == ["/kept"]
 
 
 def test_scan_utf8_bom_handled(tmp_path):
     (tmp_path / "a.py").write_bytes(b"\xef\xbb\xbf" + f'get("{BASE}/bom")'.encode())
-    assert [u.path for u in ApiScanner(BASE).scan(tmp_path)] == ["/bom"]
+    assert [u.path for u in _scan(ApiScanner(BASE), tmp_path)] == ["/bom"]

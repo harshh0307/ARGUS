@@ -64,7 +64,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--branch", default="argus/fix", help="fix branch to create")
     p.add_argument("--max-attempts", type=int, default=None, help="CI feedback loop attempts")
     p.add_argument("--check-timeout", type=float, default=None, help="seconds to wait per check")
-    p.add_argument("--merge", action="store_true", help="merge the PR when CI passes")
     p.set_defaults(func=cmd_pr)
 
     return parser
@@ -217,7 +216,6 @@ def cmd_pr(args) -> int:
                 local_dir=Path(args.dir) if args.dir else None,
                 max_attempts=args.max_attempts,
                 check_timeout=args.check_timeout,
-                merge=args.merge,
                 vendor_slug=vendor_slug,
                 languages=languages,
             )
@@ -233,14 +231,11 @@ def cmd_pr(args) -> int:
         print(f"passed={result.passed} attempts={result.attempts}")
         if result.failure:
             print(f"last failure: {result.failure[:500]}")
-        if outcome.merged:
-            print("merged; fix branch deleted")
-            any_passed = True
-        elif outcome.merge_error:
-            print(f"warning: merge rejected, PR left open: {outcome.merge_error}")
         if result.passed:
+            print("CI passed - ready for human review")
             any_passed = True
         else:
+            print("CI failed - PR left open for review")
             any_failed = True
     if any_failed and not any_passed:
         return 1
