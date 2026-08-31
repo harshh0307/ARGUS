@@ -154,6 +154,17 @@ def list_active_repositories(session: Session) -> list[Repository]:
     )
 
 
+def list_active_repos_for_vendor(session: Session, vendor_slug: str) -> list[Repository]:
+    return list(
+        session.execute(
+            select(Repository).where(
+                Repository.is_active.is_(True),
+                Repository.vendor_slug == vendor_slug,
+            )
+        ).scalars()
+    )
+
+
 def touch_repository(session: Session, repo: Repository) -> None:
     repo.last_run_at = datetime.now(UTC)
 

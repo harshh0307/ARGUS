@@ -25,7 +25,11 @@ def build_celery_app() -> object:
             "poll-all-vendors": {
                 "task": "argus.poll_all_vendors",
                 "schedule": 6 * 60 * 60.0,
-            }
+            },
+            "sync-installation-repos": {
+                "task": "argus.sync_all_installation_repos",
+                "schedule": 1 * 60 * 60.0,
+            },
         },
     )
     return app
@@ -41,6 +45,10 @@ def register_tasks() -> None:
     app.task(name="argus.scan_and_fix")(tasks.scan_and_fix)
     app.task(name="argus.register_repository")(tasks.register_repository)
     app.task(name="argus.poll_all_vendors")(tasks.poll_all_vendors)
+    app.task(name="argus.dispatch_scan_for_vendor")(tasks.dispatch_scan_for_vendor)
+    app.task(name="argus.sync_installation_repos")(tasks.sync_installation_repos)
+    app.task(name="argus.sync_all_installation_repos")(tasks.sync_all_installation_repos)
+    app.task(name="argus.merge_pr")(tasks.merge_pr)
 
 
 register_tasks()

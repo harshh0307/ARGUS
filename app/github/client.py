@@ -271,3 +271,19 @@ class GitHubClient:
 
     def delete_branch(self, owner: str, repo: str, branch: str) -> None:
         self._request("DELETE", f"/repos/{owner}/{repo}/git/refs/heads/{branch}")
+
+    def list_installation_repositories(self, installation_token: str) -> list[dict]:
+        """List repositories accessible to a GitHub App installation.
+
+        Uses the installation token directly (not the app token).
+        """
+        provider = PatTokenProvider(installation_token)
+        old_provider = self._token_provider
+        self._token_provider = provider
+        try:
+            data = self._request("GET", "/installation/repositories")
+            if data is None:
+                return []
+            return data.get("repositories", [])
+        finally:
+            self._token_provider = old_provider

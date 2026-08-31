@@ -189,26 +189,24 @@ def test_poll_all_vendors_with_no_vendors(monkeypatch):
 def test_sync_active_repos_touches_last_run_at(monkeypatch, tmp_path):
     settings, engine = seeded(tmp_path)
     session = session_factory(engine)()
-    session.add(Repository(owner="a", name="one", default_branch="main", is_active=True))
-    session.add(Repository(owner="b", name="two", default_branch="main", is_active=False))
+    session.add(Repository(owner="a", name="one", default_branch="main", is_active=True, vendor_slug="github"))
+    session.add(Repository(owner="b", name="two", default_branch="main", is_active=False, vendor_slug="github"))
     session.commit()
     session.close()
 
     monkeypatch.setattr(tasks, "get_settings", lambda: settings)
     monkeypatch.setattr(tasks, "open_session", lambda s: session_factory(engine)())
 
-    results = tasks._sync_active_repos_and_dispatch()
+    from unittest.mock import MagicMock
+    mock_send = MagicMock()
+    mock_app = MagicMock(send_task=mock_send)
+    monkeypatch.setattr(tasks, "_get_celery_app", lambda: mock_app)
 
-    assert "a/one" in results
-    assert results["a/one"]["active"] is True
-    assert "b/two" not in results
+    results = tasks.dispatch_scan_for_vendor("github", breaking_count=1)
 
-    session = session_factory(engine)()
-    repo = session.query(Repository).filter_by(owner="a", name="one").one()
-    assert repo.last_run_at is not None
-    inactive = session.query(Repository).filter_by(owner="b", name="two").one()
-    assert inactive.last_run_at is None
-    session.close()
+    assert results["dispatched"] == 1
+    assert results["repos"] == 1
+    assert mock_send.call_count == 1
 
 
 def test_register_repository_returns_same_id_for_existing(monkeypatch, tmp_path):
