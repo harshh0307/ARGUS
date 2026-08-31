@@ -15,17 +15,27 @@ from sqlalchemy.orm import Session
 
 from app.api.schemas import (
     ChangelogHitOut,
+    DetectIn,
     DetectionRunOut,
+    DetectOut,
     InstallationOut,
+    MergeIn,
+    MergeOut,
+    PipelineIn,
+    PipelineOut,
+    PollOut,
     RepositoryCreated,
     RepositoryIn,
     RepositoryOut,
+    RerunIn,
+    RerunOut,
     VendorOut,
     WebhookOut,
 )
 from app.core.config import Settings, get_settings
 from app.db.models import DetectionRun, Repository
 from app.db.repository import open_session, upsert_repository
+from app.github.client import GitHubClient
 from app.registry.vendors import get_vendor, list_vendors
 from app.workers.celery_app import app as celery_app
 
@@ -348,6 +358,83 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return handler(payload, settings)
         except KeyError as exc:
             return WebhookOut(ok=True, event=event, dispatched=False, reason=f"malformed payload: missing {exc}")
+
+    # ── Control endpoints ────────────────────────────────────────────
+
+    def _dispatch_task(task_name: str, args: list | None = None, kwargs: dict | None = None) -> tuple[bool, str | None]:
+        try:
+            result = celery_app.send_task(task_name, args=args or [], kwargs=kwargs or {})
+            return True, result.id
+        except Exception:  # noqa: BLE001
+
+            from app.workers import tasks as worker_tasks
+            func = getattr(worker_tasks, task_name.replace("argus.", "").replace(".", "_"), None)
+            if func is None:
+                return False, None
+            threading.Thread(target=func, args=args or [], kwargs=kwargs or {}, daemon=True).start()
+            return True, None
+
+    @app.post("/api/v1/poll", response_model=PollOut)
+    def trigger_poll(settings: SettingsDep) -> PollOut:
+        dispatched, task_id = _dispatch_task("argus.poll_all_vendors")
+        return PollOut(dispatched=dispatched, task_id=task_id)
+
+    @app.post("/api/v1/detect", response_model=DetectOut)
+    def trigger_detect(payload: DetectIn, settings: SettingsDep) -> DetectOut:
+        dispatched, task_id = _dispatch_task(
+            "argus.run_detection", args=[payload.vendor_slug]
+        )
+        return DetectOut(dispatched=dispatched, vendor_slug=payload.vendor_slug, task_id=task_id)
+
+    @app.post("/api/v1/pipeline", response_model=PipelineOut)
+    def trigger_pipeline(payload: PipelineIn, settings: SettingsDep) -> PipelineOut:
+        dispatched, task_id = _dispatch_task(
+            "argus.scan_and_fix",
+            args=[payload.repository_id],
+            kwargs={"merge": payload.merge},
+        )
+        return PipelineOut(
+            dispatched=dispatched, repository_id=payload.repository_id, task_id=task_id
+        )
+
+    @app.post("/api/v1/fix/rerun", response_model=RerunOut)
+    def trigger_rerun(payload: RerunIn, settings: SettingsDep) -> RerunOut:
+        dispatched, task_id = _dispatch_task(
+            "argus.scan_and_fix",
+            args=[payload.repository_id],
+            kwargs={"merge": False},
+        )
+        return RerunOut(
+            dispatched=dispatched, repository_id=payload.repository_id, task_id=task_id
+        )
+
+    @app.post("/api/v1/pr/merge", response_model=MergeOut)
+    def trigger_merge(payload: MergeIn, settings: SettingsDep) -> MergeOut:
+        def _do_merge():
+            client = GitHubClient(token=settings.github_token)
+            client.merge_pull_request(payload.owner, payload.repo, payload.pr_number)
+
+        try:
+            celery_app.send_task(
+                "argus.merge_pr",
+                args=[payload.owner, payload.repo, payload.pr_number],
+            )
+            return MergeOut(
+                dispatched=True,
+                owner=payload.owner,
+                repo=payload.repo,
+                pr_number=payload.pr_number,
+                task_id=None,
+            )
+        except Exception:  # noqa: BLE001
+            threading.Thread(target=_do_merge, daemon=True).start()
+            return MergeOut(
+                dispatched=True,
+                owner=payload.owner,
+                repo=payload.repo,
+                pr_number=payload.pr_number,
+                task_id=None,
+            )
 
     # ── Dashboard routes ─────────────────────────────────────────────
     from app.api.dashboard import router as dashboard_router

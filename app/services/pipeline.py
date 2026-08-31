@@ -201,4 +201,10 @@ def run_repo_pipeline(
             vendor_guidance=vendor_guidance,
         )
         outcome.pr_result = result
+        if merge and result.passed:
+            try:
+                client.merge_pull_request(owner, repo, result.pr_number)
+                outcome.merged = True
+            except GitHubApiError as exc:
+                outcome.merge_error = str(exc)
         return outcome

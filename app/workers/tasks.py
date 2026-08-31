@@ -1,17 +1,31 @@
 from __future__ import annotations
 
+import threading
+
 from app.core.config import get_settings
 from app.db.models import Repository
 from app.db.repository import (
-    list_active_repositories,
+    list_active_repos_for_vendor,
+    list_installations,
     open_session,
     persist_detection,
-    touch_repository,
     upsert_repository,
 )
-from app.github.client import GitHubApiError
+from app.github.client import GitHubApiError, GitHubClient
 from app.registry.vendors import get_vendor, list_vendors
 from app.services.pipeline import detect_changes, run_repo_pipeline
+
+_celery_app = None
+
+
+def _get_celery_app():
+    global _celery_app
+    if _celery_app is None:
+        try:
+            from app.workers.celery_app import app as _celery_app
+        except Exception:  # noqa: BLE001, S110
+            pass
+    return _celery_app
 
 
 def run_detection(vendor_slug: str = "github") -> dict:
@@ -88,6 +102,96 @@ def register_repository(
         session.close()
 
 
+def dispatch_scan_for_vendor(vendor_slug: str, breaking_count: int = 0) -> dict:
+    """After detection finds breaking changes, scan all repos that use this vendor."""
+    if breaking_count == 0:
+        return {"dispatched": 0}
+    settings = get_settings()
+    session = open_session(settings)
+    try:
+        repos = list_active_repos_for_vendor(session, vendor_slug)
+    finally:
+        session.close()
+    dispatched = 0
+    for repo in repos:
+        try:
+            app = _get_celery_app()
+            if app is not None:
+                app.send_task(
+                    "argus.scan_and_fix", args=[repo.id], kwargs={"merge": True}
+                )
+            else:
+                raise RuntimeError("celery unavailable")
+        except Exception:  # noqa: BLE001
+            threading.Thread(
+                target=scan_and_fix,
+                args=(repo.id,),
+                kwargs={"merge": True},
+                daemon=True,
+            ).start()
+        dispatched += 1
+    return {"dispatched": dispatched, "vendor": vendor_slug, "repos": len(repos)}
+
+
+def sync_installation_repos(install_id: int, installation_token: str) -> dict:
+    """Query GitHub API for repos in this installation, upsert into DB."""
+    settings = get_settings()
+    client = GitHubClient(token=installation_token)
+    try:
+        repos = client.list_installation_repositories(installation_token)
+    except (GitHubApiError, OSError) as exc:
+        return {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+    session = open_session(settings)
+    try:
+        for repo_data in repos:
+            owner = repo_data["owner"]["login"]
+            name = repo_data["name"]
+            default_branch = repo_data.get("default_branch")
+            upsert_repository(session, owner, name, default_branch, vendor_slug="github")
+        session.commit()
+    finally:
+        session.close()
+    return {"synced": len(repos), "install_id": install_id}
+
+
+def sync_all_installation_repos() -> dict:
+    """Iterate all active installations, sync repos for each."""
+    settings = get_settings()
+    if not settings.database_url:
+        return {"error": "DATABASE_URL not set"}
+    session = open_session(settings)
+    try:
+        installations = list_installations(session)
+    finally:
+        session.close()
+    results = {}
+    for inst in installations:
+        if not inst.is_active:
+            continue
+        results[str(inst.install_id)] = {
+            "install_id": inst.install_id,
+            "owner": inst.owner,
+            "status": "skipped_no_token",
+        }
+    return {"installations": len(results), "results": results}
+
+
+def merge_pr(owner: str, repo: str, pr_number: int) -> dict:
+    settings = get_settings()
+    client = GitHubClient(token=settings.github_token)
+    try:
+        result = client.merge_pull_request(owner, repo, pr_number)
+        return {"owner": owner, "repo": repo, "pr_number": pr_number, "merged": True, "result": result}
+    except (GitHubApiError, OSError) as exc:
+        return {
+            "owner": owner,
+            "repo": repo,
+            "pr_number": pr_number,
+            "merged": False,
+            "error": f"{type(exc).__name__}: {str(exc)[:200]}",
+        }
+
+
 def poll_all_vendors() -> dict:
     settings = get_settings()
     summary: dict[str, dict] = {}
@@ -95,25 +199,24 @@ def poll_all_vendors() -> dict:
         if not vendor.enabled:
             continue
         try:
-            summary[vendor.slug] = run_detection(vendor.slug)
+            result = run_detection(vendor.slug)
+            summary[vendor.slug] = result
+            if result.get("breaking_count", 0) > 0:
+                try:
+                    app = _get_celery_app()
+                    if app is not None:
+                        app.send_task(
+                            "argus.dispatch_scan_for_vendor",
+                            args=[vendor.slug, result["breaking_count"]],
+                        )
+                    else:
+                        raise RuntimeError("celery unavailable")
+                except Exception:  # noqa: BLE001
+                    threading.Thread(
+                        target=dispatch_scan_for_vendor,
+                        args=(vendor.slug, result["breaking_count"]),
+                        daemon=True,
+                    ).start()
         except (GitHubApiError, OSError, ValueError) as exc:
             summary[vendor.slug] = {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
     return summary
-
-
-def _sync_active_repos_and_dispatch() -> dict:
-    settings = get_settings()
-    session = open_session(settings)
-    try:
-        repos = list_active_repositories(session)
-        results = {}
-        for repo in repos:
-            touch_repository(session, repo)
-            results[f"{repo.owner}/{repo.name}"] = {
-                "repository_id": repo.id,
-                "active": repo.is_active,
-            }
-        session.commit()
-        return results
-    finally:
-        session.close()

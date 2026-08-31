@@ -71,3 +71,57 @@ class ChangelogHitOut(BaseModel):
     detail: str | None = None
     score: float
     created_at: datetime
+
+
+class PollIn(BaseModel):
+    pass
+
+
+class PollOut(BaseModel):
+    dispatched: bool
+    task_id: str | None = None
+
+
+class DetectIn(BaseModel):
+    vendor_slug: str
+
+
+class DetectOut(BaseModel):
+    dispatched: bool
+    vendor_slug: str
+    task_id: str | None = None
+
+
+class PipelineIn(BaseModel):
+    repository_id: int
+    merge: bool = True
+
+
+class PipelineOut(BaseModel):
+    dispatched: bool
+    repository_id: int
+    task_id: str | None = None
+
+
+class RerunIn(BaseModel):
+    repository_id: int
+
+
+class RerunOut(BaseModel):
+    dispatched: bool
+    repository_id: int
+    task_id: str | None = None
+
+
+class MergeIn(BaseModel):
+    owner: str
+    repo: str
+    pr_number: int
+
+
+class MergeOut(BaseModel):
+    dispatched: bool
+    owner: str
+    repo: str
+    pr_number: int
+    task_id: str | None = None
