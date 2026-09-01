@@ -71,7 +71,7 @@ def test_detect_prints_summary(monkeypatch, capsys):
         return {
             "breaking_count": 1,
             "additive_count": 2,
-            "changes": [change(), change(kind="schema_added", method="get", severity="additive")],
+            "changes": [change(), change(kind="schema_property_added", method="get", severity="additive")],
         }
 
     patch_deps(monkeypatch, run_detection=fake_detection)

@@ -1,15 +1,17 @@
 import type { NextConfig } from "next";
 
+const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
 const nextConfig: NextConfig = {
   async rewrites() {
     return [
       {
         source: "/health",
-        destination: "http://localhost:8000/health",
+        destination: `${apiBase}/health`,
       },
       {
         source: "/api/v1/:path*",
-        destination: "http://localhost:8000/api/v1/:path*",
+        destination: `${apiBase}/api/v1/:path*`,
       },
     ];
   },
