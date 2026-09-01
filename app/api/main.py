@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
@@ -168,6 +169,18 @@ _WEBHOOK_HANDLERS = {
 def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="Argus API", version="0.1.0")
     app.state.settings = settings or get_settings()
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://localhost:3000",
+            "https://web-seven-cyan-48.vercel.app",
+            "https://*.vercel.app",
+        ],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     @app.get("/health")
     def health(request: Request) -> dict:

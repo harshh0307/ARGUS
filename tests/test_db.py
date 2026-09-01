@@ -61,7 +61,7 @@ def test_persist_detection_writes_vendor_and_run(tmp_path):
         "additive_count": 1,
         "changes": [
             Change("endpoint_removed", BREAKING, "/v1/x", "post"),
-            Change("schema_added", "additive", "/v1/x", "get"),
+            Change("schema_property_added", "additive", "/v1/x", "get"),
         ],
     }
 
