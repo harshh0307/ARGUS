@@ -3,6 +3,7 @@
 import { useHealth } from "@/hooks/use-health";
 import { useVendors } from "@/hooks/use-vendors";
 import { useTheme } from "next-themes";
+import { motion } from "@/components/ui/motion";
 import { Sun, Moon, Activity, Zap } from "lucide-react";
 import {
   Select,
@@ -73,7 +74,9 @@ export function Header() {
           <Activity className="h-3 w-3 text-[var(--passed)]" />
           <span>Primary: OpenAI / Gemini | Fallback: OpenRouter Nemotron-3 (Ready)</span>
         </div>
-        <button
+        <motion.button
+          whileTap={{ rotate: 180, scale: 0.9 }}
+          transition={{ duration: 0.3 }}
           onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
           className="p-2 rounded-md hover:bg-[var(--surface-hover)] transition-colors"
         >
@@ -82,7 +85,7 @@ export function Header() {
           ) : (
             <Moon className="h-4 w-4 text-[var(--muted-foreground)]" />
           )}
-        </button>
+        </motion.button>
       </div>
     </header>
   );

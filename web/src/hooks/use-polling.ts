@@ -41,12 +41,16 @@ export function usePolling<T>(
 
   useEffect(() => {
     activeRef.current = true;
-    if (enabled && immediate) doFetch();
+    let timer: ReturnType<typeof setTimeout> | null = null;
     if (enabled) {
+      if (immediate) {
+        timer = setTimeout(doFetch, 0);
+      }
       intervalRef.current = setInterval(doFetch, intervalMs);
     }
     return () => {
       activeRef.current = false;
+      if (timer) clearTimeout(timer);
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
   }, [doFetch, intervalMs, enabled, immediate]);

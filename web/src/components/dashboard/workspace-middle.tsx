@@ -4,8 +4,8 @@ import { useState } from "react";
 import { useDetectionRuns } from "@/hooks/use-detection-runs";
 import { LANGUAGES } from "@/lib/constants";
 import { SEVERITY_BG } from "@/lib/constants";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Toggle } from "@/components/ui/toggle";
+import { StaggerContainer, StaggerItem, motion } from "@/components/ui/motion";
 import { FileCode, FolderOpen } from "lucide-react";
 
 export function WorkspaceMiddle() {
@@ -39,7 +39,7 @@ export function WorkspaceMiddle() {
               size="sm"
               pressed={activeLanguages.includes(lang.id)}
               onPressedChange={() => toggleLanguage(lang.id)}
-              className="h-6 text-[10px] px-2 data-[state=on]:bg-[var(--agent)]/20 data-[state=on]:text-[var(--agent)] data-[state=on]:border-[var(--agent)]/30 border border-[var(--border)] bg-[var(--surface)]"
+              className="h-6 text-[10px] px-2 data-[state=on]:bg-[var(--agent)]/20 data-[state=on]:text-[var(--agent)] data-[state=on]:border-[var(--agent)]/30 border border-[var(--border)] bg-[var(--surface)] active:scale-[0.95]"
             >
               <span className="mr-1">{lang.icon}</span>
               {lang.label}
@@ -60,61 +60,69 @@ export function WorkspaceMiddle() {
               Select a detection run to view impacts
             </div>
           ) : (
-            <>
+            <StaggerContainer staggerDelay={0.03}>
               {breakingChanges.length > 0 && (
-                <div className="space-y-1">
+                <>
                   <div className="text-[10px] text-[var(--breaking)] font-medium">
                     Breaking Changes
                   </div>
                   {breakingChanges.map((change, i) => (
-                    <button
-                      key={i}
-                      onClick={() => setSelectedChange(i)}
-                      className={`w-full text-left flex items-center gap-2 text-[10px] py-1.5 px-2 rounded transition-colors ${
-                        selectedChange === i
-                          ? "bg-[var(--breaking)]/10 text-[var(--breaking)]"
-                          : "text-[var(--muted-foreground)] hover:bg-[var(--surface-hover)]"
-                      }`}
-                    >
-                      <FileCode className="h-3 w-3 shrink-0" />
-                      <span className="font-mono truncate">
-                        {change.method.toUpperCase()} {change.path}
-                      </span>
-                    </button>
+                    <StaggerItem key={`b-${i}`}>
+                      <button
+                        onClick={() => setSelectedChange(i)}
+                        className={`w-full text-left flex items-center gap-2 text-[10px] py-1.5 px-2 rounded transition-colors ${
+                          selectedChange === i
+                            ? "bg-[var(--breaking)]/10 text-[var(--breaking)]"
+                            : "text-[var(--muted-foreground)] hover:bg-[var(--surface-hover)]"
+                        }`}
+                      >
+                        <FileCode className="h-3 w-3 shrink-0" />
+                        <span className="font-mono truncate">
+                          {change.method.toUpperCase()} {change.path}
+                        </span>
+                      </button>
+                    </StaggerItem>
                   ))}
-                </div>
+                </>
               )}
               {additiveChanges.length > 0 && (
-                <div className="space-y-1 mt-2">
-                  <div className="text-[10px] text-[var(--passed)] font-medium">
+                <>
+                  <div className="text-[10px] text-[var(--passed)] font-medium mt-2">
                     Additive Changes
                   </div>
                   {additiveChanges.map((change, i) => (
-                    <button
-                      key={i}
-                      onClick={() => setSelectedChange(breakingChanges.length + i)}
-                      className={`w-full text-left flex items-center gap-2 text-[10px] py-1.5 px-2 rounded transition-colors ${
-                        selectedChange === breakingChanges.length + i
-                          ? "bg-[var(--passed)]/10 text-[var(--passed)]"
-                          : "text-[var(--muted-foreground)] hover:bg-[var(--surface-hover)]"
-                      }`}
-                    >
-                      <FolderOpen className="h-3 w-3 shrink-0" />
-                      <span className="font-mono truncate">
-                        {change.method.toUpperCase()} {change.path}
-                      </span>
-                    </button>
+                    <StaggerItem key={`a-${i}`}>
+                      <button
+                        onClick={() => setSelectedChange(breakingChanges.length + i)}
+                        className={`w-full text-left flex items-center gap-2 text-[10px] py-1.5 px-2 rounded transition-colors ${
+                          selectedChange === breakingChanges.length + i
+                            ? "bg-[var(--passed)]/10 text-[var(--passed)]"
+                            : "text-[var(--muted-foreground)] hover:bg-[var(--surface-hover)]"
+                        }`}
+                      >
+                        <FolderOpen className="h-3 w-3 shrink-0" />
+                        <span className="font-mono truncate">
+                          {change.method.toUpperCase()} {change.path}
+                        </span>
+                      </button>
+                    </StaggerItem>
                   ))}
-                </div>
+                </>
               )}
-            </>
+            </StaggerContainer>
           )}
         </div>
 
         {/* Code View */}
         <div className="flex-1 overflow-y-auto p-4">
           {selectedChange !== null && changes[selectedChange] ? (
-            <div className="space-y-3">
+            <motion.div
+              key={selectedChange}
+              initial={{ opacity: 0, x: 8 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: 0.25, ease: "easeOut" }}
+              className="space-y-3"
+            >
               <div className="flex items-center gap-2">
                 <span
                   className={`text-[10px] px-2 py-0.5 rounded border ${
@@ -150,7 +158,7 @@ export function WorkspaceMiddle() {
               </div>
               <div className="bg-black/30 rounded-lg p-4 font-mono text-xs text-[var(--muted-foreground)]">
                 <div className="text-[10px] text-[var(--agent)] mb-2">
-                  // Code with affected call site
+                  {"// Code with affected call site"}
                 </div>
                 <div className="space-y-0.5">
                   <div>
@@ -172,7 +180,7 @@ export function WorkspaceMiddle() {
                   </div>
                 </div>
               </div>
-            </div>
+            </motion.div>
           ) : (
             <div className="flex items-center justify-center h-full text-xs text-[var(--muted-foreground)]">
               Select a change to view details

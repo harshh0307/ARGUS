@@ -131,7 +131,7 @@ def test_ts_and_jsx_suffixes_use_js_scanner(tmp_path):
 
     (tmp_path / "a.tsx").write_text(f'fetch("{BASE}/tsx")', encoding="utf-8")
     (tmp_path / "b.mjs").write_text(f'fetch("{BASE}/mjs")', encoding="utf-8")
-    usages, _headers = _scan(ApiScanner(BASE), tmp_path)
+    usages, _headers, _bodies, _auths, _responses = _scan(ApiScanner(BASE), tmp_path)
     assert sorted(u.path for u in usages) == ["/mjs", "/tsx"]
 
 

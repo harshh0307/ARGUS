@@ -50,10 +50,13 @@ def test_response_code_removed_is_breaking():
     assert any(c.kind == "response_code_removed" for c in diff_specs(old, new))
 
 
-def test_description_changes_produce_no_changes():
+def test_description_changes_are_detected():
     old = spec({"/a": {"get": {"summary": "old", "description": "old words", "parameters": [], "responses": {"200": {}}}}})
     new = spec({"/a": {"get": {"summary": "new", "description": "new words", "parameters": [], "responses": {"200": {}}}}})
-    assert diff_specs(old, new) == []
+    changes = diff_specs(old, new)
+    kinds = {c.kind.value for c in changes}
+    assert "operation_summary_changed" in kinds
+    assert "operation_description_changed" in kinds
 
 
 def test_reordering_produces_no_changes():

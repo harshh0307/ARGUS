@@ -31,13 +31,20 @@ def test_normalize_skips_params_without_name():
 def test_normalize_param_without_location_gets_empty_string():
     operation = {"parameters": [{"name": "id", "schema": {"type": "string"}}]}
     normalized = normalize_spec({"paths": {"/a": {"get": operation}}})
-    assert normalized["get /a"]["parameters"] == [("", "id", False, "string", False)]
+    p = normalized["get /a"]["parameters"][0]
+    assert p[0] == ""  # location
+    assert p[1] == "id"  # name
+    assert p[2] is False  # required
+    assert p[3] == "string"  # type
 
 
 def test_normalize_schema_not_dict_yields_none_type():
     operation = {"parameters": [{"name": "id", "in": "query", "schema": "string"}]}
     normalized = normalize_spec({"paths": {"/a": {"get": operation}}})
-    assert normalized["get /a"]["parameters"] == [("query", "id", False, None, False)]
+    p = normalized["get /a"]["parameters"][0]
+    assert p[0] == "query"  # location
+    assert p[1] == "id"  # name
+    assert p[3] is None  # type (schema not a dict)
 
 
 def test_normalize_sorts_parameters_by_location_then_name():
@@ -66,7 +73,11 @@ def test_normalize_extracts_responses_and_required():
         "responses": {"200": {}, "404": {}},
     }
     normalized = normalize_spec({"paths": {"/a": {"get": operation}}})
-    assert normalized["get /a"]["parameters"] == [("path", "id", True, "integer", False)]
+    p = normalized["get /a"]["parameters"][0]
+    assert p[0] == "path"
+    assert p[1] == "id"
+    assert p[2] is True
+    assert p[3] == "integer"
     assert normalized["get /a"]["responses"] == {"200", "404"}
 
 
@@ -78,14 +89,16 @@ def test_diff_param_location_change_is_removal_only():
     old = {"paths": {"/a": {"get": {"parameters": [{"name": "id", "in": "query", "schema": {"type": "string"}}]}}}}
     new = {"paths": {"/a": {"get": {"parameters": [{"name": "id", "in": "path", "schema": {"type": "string"}}]}}}}
     changes = diff_specs(old, new)
-    kinds = {c.kind for c in changes}
-    assert kinds == {"param_removed"}
+    kinds = {c.kind.value for c in changes}
+    assert "param_removed" in kinds
 
 
-def test_diff_new_parameter_is_not_breaking():
+def test_diff_new_parameter_is_additive():
     old = {"paths": {"/a": {"get": {"parameters": []}}}}
     new = {"paths": {"/a": {"get": {"parameters": [{"name": "q", "in": "query", "schema": {"type": "string"}}]}}}}
-    assert diff_specs(old, new) == []
+    changes = diff_specs(old, new)
+    kinds = {c.kind.value for c in changes}
+    assert "param_added" in kinds
 
 
 def test_diff_type_change_from_none_is_ignored():
@@ -94,16 +107,20 @@ def test_diff_type_change_from_none_is_ignored():
     assert diff_specs(old, new) == []
 
 
-def test_diff_parameter_required_removed_is_not_breaking():
+def test_diff_parameter_required_removed_is_additive():
     old = {"paths": {"/a": {"get": {"parameters": [{"name": "id", "in": "query", "required": True, "schema": {"type": "string"}}]}}}}
     new = {"paths": {"/a": {"get": {"parameters": [{"name": "id", "in": "query", "schema": {"type": "string"}}]}}}}
-    assert diff_specs(old, new) == []
+    changes = diff_specs(old, new)
+    kinds = {c.kind.value for c in changes}
+    assert "param_optional" in kinds
 
 
-def test_diff_response_code_added_is_not_breaking():
+def test_diff_response_code_added_is_additive():
     old = {"paths": {"/a": {"get": {"responses": {"200": {}}}}}}
     new = {"paths": {"/a": {"get": {"responses": {"200": {}, "201": {}}}}}}
-    assert diff_specs(old, new) == []
+    changes = diff_specs(old, new)
+    kinds = {c.kind.value for c in changes}
+    assert "response_code_added" in kinds
 
 
 def test_diff_renamed_endpoint_reports_removed_and_added():

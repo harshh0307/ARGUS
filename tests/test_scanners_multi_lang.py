@@ -14,7 +14,7 @@ def _scanner(languages: set[str] | None = None) -> ApiScanner:
 
 
 def _scan(scanner: ApiScanner, source: str, filename: str) -> list:
-    usages, _headers = scanner.scan_source(source, filename)
+    usages, _headers, _bodies, _auths, _responses = scanner.scan_source(source, filename)
     return usages
 
 

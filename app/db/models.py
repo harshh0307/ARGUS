@@ -57,6 +57,7 @@ class Repository(Base):
     __tablename__ = "repositories"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     owner: Mapped[str] = mapped_column(String(128))
     name: Mapped[str] = mapped_column(String(128))
     vendor_slug: Mapped[str] = mapped_column(String(64), default="github")
@@ -70,6 +71,7 @@ class AppInstallation(Base):
     __tablename__ = "app_installations"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     install_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
     owner: Mapped[str] = mapped_column(String(128), index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -91,4 +93,21 @@ class ChangelogEntry(Base):
     method: Mapped[str] = mapped_column(String(64))
     detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     embedding: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PipelineRun(Base):
+    __tablename__ = "pipeline_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    repository_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("repositories.id"), index=True
+    )
+    status: Mapped[str] = mapped_column(String(16), default="queued")
+    task_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    pr_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pr_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

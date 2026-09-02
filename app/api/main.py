@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.schemas import (
+    ActivityEventOut,
     ChangelogHitOut,
     DetectIn,
     DetectionRunOut,
@@ -24,6 +25,7 @@ from app.api.schemas import (
     MergeOut,
     PipelineIn,
     PipelineOut,
+    PipelineRunOut,
     PollOut,
     RepositoryCreated,
     RepositoryIn,
@@ -34,7 +36,7 @@ from app.api.schemas import (
     WebhookOut,
 )
 from app.core.config import Settings, get_settings
-from app.db.models import DetectionRun, Repository
+from app.db.models import DetectionRun, PipelineRun, Repository
 from app.db.repository import open_session, upsert_repository
 from app.github.client import GitHubClient
 from app.registry.vendors import get_vendor, list_vendors
@@ -159,10 +161,45 @@ def _handle_repository_dispatch(payload: dict, settings: Settings) -> WebhookOut
     return WebhookOut(ok=True, event="repository_dispatch", dispatched=dispatched)
 
 
+def _handle_pull_request(payload: dict, settings: Settings) -> WebhookOut:
+    """Handle pull_request webhook: trigger scan on PR opened/synchronize."""
+    action = payload.get("action", "")
+    if action not in ("opened", "synchronize", "reopened"):
+        return WebhookOut(ok=True, event="pull_request", dispatched=False, reason=f"ignored action {action!r}")
+
+    owner, name = _repo_from_push(payload)
+    session = _db_session(settings)
+    try:
+        repo = session.execute(
+            select(Repository).where(Repository.owner == owner, Repository.name == name)
+        ).scalar_one_or_none()
+    finally:
+        session.close()
+    if repo is None or not repo.is_active:
+        return WebhookOut(ok=True, event="pull_request", dispatched=False, reason="repository not registered")
+    dispatched = _dispatch_scan_and_fix(repo.id)
+    pr_number = payload.get("pull_request", {}).get("number")
+    return WebhookOut(ok=True, event="pull_request", dispatched=dispatched, reason=f"PR #{pr_number} {action}")
+
+
+def _handle_check_run(payload: dict, settings: Settings) -> WebhookOut:
+    """Handle check_run webhook: log CI check results."""
+    action = payload.get("action", "")
+    if action not in ("completed", "created"):
+        return WebhookOut(ok=True, event="check_run", dispatched=False, reason=f"ignored action {action!r}")
+
+    check_run = payload.get("check_run", {})
+    conclusion = check_run.get("conclusion", "")
+    name = check_run.get("name", "")
+    return WebhookOut(ok=True, event="check_run", dispatched=False, reason=f"check {name!r} concluded {conclusion!r}")
+
+
 _WEBHOOK_HANDLERS = {
     "push": _handle_push,
     "installation": _handle_installation,
     "repository_dispatch": _handle_repository_dispatch,
+    "pull_request": _handle_pull_request,
+    "check_run": _handle_check_run,
 }
 
 
@@ -185,6 +222,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/health")
     def health(request: Request) -> dict:
         return {"status": "ok", "database": bool(app.state.settings.database_url)}
+
+    @app.get("/metrics")
+    def metrics_endpoint() -> dict:
+        from app.metrics import metrics
+        return metrics.export()
 
     @app.get("/api/v1/vendors", response_model=list[VendorOut])
     def vendors(settings: SettingsDep) -> list[VendorOut]:
@@ -345,6 +387,78 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 )
                 for row, score in hits
             ]
+        finally:
+            session.close()
+
+    @app.get("/api/v1/pipeline-runs", response_model=list[PipelineRunOut])
+    def pipeline_runs(
+        settings: SettingsDep, limit: int = Query(default=20, ge=1, le=100)
+    ) -> list[PipelineRunOut]:
+        session = _db_session(settings)
+        try:
+            rows = session.execute(
+                select(PipelineRun).order_by(PipelineRun.id.desc()).limit(limit)
+            ).scalars().all()
+            return [
+                PipelineRunOut(
+                    id=r.id,
+                    repository_id=r.repository_id,
+                    status=r.status,
+                    task_id=r.task_id,
+                    started_at=r.started_at,
+                    completed_at=r.completed_at,
+                    pr_number=r.pr_number,
+                    pr_url=r.pr_url,
+                    error_message=r.error_message,
+                    created_at=r.created_at,
+                )
+                for r in rows
+            ]
+        finally:
+            session.close()
+
+    @app.get("/api/v1/activity", response_model=list[ActivityEventOut])
+    def activity(
+        settings: SettingsDep, limit: int = Query(default=30, ge=1, le=100)
+    ) -> list[ActivityEventOut]:
+        """Combined timeline of detection runs and pipeline runs."""
+        session = _db_session(settings)
+        try:
+            events: list[ActivityEventOut] = []
+            detections = session.execute(
+                select(DetectionRun).order_by(DetectionRun.id.desc()).limit(limit)
+            ).scalars().all()
+            for r in detections:
+                total = r.breaking_count + r.additive_count
+                title = f"Detected {r.breaking_count} breaking, {r.additive_count} additive changes in {r.vendor_slug}"
+                events.append(ActivityEventOut(
+                    kind="detection",
+                    timestamp=r.created_at,
+                    title=title,
+                    detail=f"Run #{r.id} — {total} total changes",
+                    status="breaking" if r.breaking_count > 0 else "additive",
+                ))
+            pipelines = session.execute(
+                select(PipelineRun).order_by(PipelineRun.id.desc()).limit(limit)
+            ).scalars().all()
+            for r in pipelines:
+                repo = session.get(Repository, r.repository_id)
+                repo_name = f"{repo.owner}/{repo.name}" if repo else f"repo #{r.repository_id}"
+                title = f"Pipeline for {repo_name}"
+                detail_parts = []
+                if r.pr_number:
+                    detail_parts.append(f"PR #{r.pr_number}")
+                if r.error_message:
+                    detail_parts.append(r.error_message[:100])
+                events.append(ActivityEventOut(
+                    kind="pipeline",
+                    timestamp=r.created_at,
+                    title=title,
+                    detail=" — ".join(detail_parts) if detail_parts else None,
+                    status=r.status,
+                ))
+            events.sort(key=lambda e: e.timestamp, reverse=True)
+            return events[:limit]
         finally:
             session.close()
 

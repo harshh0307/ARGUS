@@ -125,3 +125,24 @@ class MergeOut(BaseModel):
     repo: str
     pr_number: int
     task_id: str | None = None
+
+
+class PipelineRunOut(BaseModel):
+    id: int
+    repository_id: int
+    status: str
+    task_id: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    pr_number: int | None = None
+    pr_url: str | None = None
+    error_message: str | None = None
+    created_at: datetime
+
+
+class ActivityEventOut(BaseModel):
+    kind: str
+    timestamp: datetime
+    title: str
+    detail: str | None = None
+    status: str | None = None
