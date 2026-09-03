@@ -21,9 +21,19 @@ def make_app(database_url=None, **overrides):
         "github_app_id": None,
         "github_app_private_key": None,
         "github_install_id": None,
+        "auth_secret_key": "test-secret-key-for-jwt",
+        "auth_algorithm": "HS256",
+        "access_token_expire_minutes": 30,
+        "refresh_token_expire_days": 7,
     }
     defaults.update(overrides)
     return create_app(Settings(**defaults))
+
+
+def register_and_login(client, email="test@example.com", password="secret123"):
+    client.post("/api/v1/auth/register", json={"email": email, "password": password})
+    resp = client.post("/api/v1/auth/login", json={"email": email, "password": password})
+    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
 
 def seeded_engine(tmp_path):
@@ -176,7 +186,8 @@ def test_api_search_endpoint(tmp_path):
     client = TestClient(
         make_app(database_url=engine.url.render_as_string(hide_password=False))
     )
-    response = client.get("/api/v1/search/changelog", params={"q": "delete repo", "vendor": "github"})
+    headers = register_and_login(client)
+    response = client.get("/api/v1/search/changelog", params={"q": "delete repo", "vendor": "github"}, headers=headers)
     assert response.status_code == 200
     hits = response.json()
     assert len(hits) == 1
@@ -189,4 +200,5 @@ def test_api_search_empty_query_returns_empty(tmp_path):
     client = TestClient(
         make_app(database_url=engine.url.render_as_string(hide_password=False))
     )
-    assert client.get("/api/v1/search/changelog", params={"q": ""}).json() == []
+    headers = register_and_login(client)
+    assert client.get("/api/v1/search/changelog", params={"q": ""}, headers=headers).json() == []

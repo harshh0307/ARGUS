@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from app.scan.models import HeaderUsage, Usage
+from app.scan.models import AuthUsage, BodyUsage, HeaderUsage, ResponseUsage, Usage
 from app.scan.scanner import extract_path
 
 RUBY_METHODS = ("get", "post", "put", "patch", "delete", "head", "options")
@@ -316,3 +316,51 @@ class RubyScanner:
             for m in header_bracket_re.finditer(line):
                 headers.append(HeaderUsage(filename, i, m.group(1), None, "header"))
         return headers
+
+    def scan_body(self, source: str, filename: str = "<string>") -> list[BodyUsage]:
+        bodies: list[BodyUsage] = []
+        lines = source.splitlines()
+        json_re = re.compile(r"""\.to_json|\.body\s*=\s*\{([^}]+)\}""", re.DOTALL)
+        field_re = re.compile(r"""['"](\w+)['"]\s*=>""")
+        form_re = re.compile(r"""\.form_data\s*=\s*\{([^}]+)\}""")
+        for i, line in enumerate(lines, 1):
+            for m in json_re.finditer(line):
+                fields = tuple(sorted(set(field_re.findall(m.group(1)))))
+                if fields:
+                    bodies.append(BodyUsage(filename, i, "post", "/", fields, "application/json"))
+            for m in form_re.finditer(line):
+                fields = tuple(sorted(set(field_re.findall(m.group(1)))))
+                if fields:
+                    bodies.append(BodyUsage(filename, i, "post", "/", fields, "application/x-www-form-urlencoded"))
+        return bodies
+
+    def scan_auth(self, source: str, filename: str = "<string>") -> list[AuthUsage]:
+        auths: list[AuthUsage] = []
+        lines = source.splitlines()
+        bearer_re = re.compile(r"""['"]Bearer\s+[\w.=-]+['"]""")
+        auth_header_re = re.compile(r"""\[['"]Authorization['"]\]\s*=\s*['"]Bearer""")
+        api_key_re = re.compile(r"""['"](?:X-Api-Key|X-Auth-Token|Api-Key)['"]?\s*=>\s*['"]?(\w+)['"]?""")
+        basic_re = re.compile(r"""Base64\.encode64""")
+        oauth_re = re.compile(r"""['"]access_token['"]\s*=>\s*['"]?(\w+)['"]?""")
+        for i, line in enumerate(lines, 1):
+            if bearer_re.search(line) or auth_header_re.search(line):
+                auths.append(AuthUsage(filename, i, "bearer", "Authorization", None, None))
+            for m in api_key_re.finditer(line):
+                auths.append(AuthUsage(filename, i, "api_key", m.group(0).split("=>")[0].strip().strip("'\""), None, None))
+            if basic_re.search(line):
+                auths.append(AuthUsage(filename, i, "basic", "Authorization", None, None))
+            if oauth_re.search(line):
+                auths.append(AuthUsage(filename, i, "oauth2", None, None, None))
+        return auths
+
+    def scan_response(self, source: str, filename: str = "<string>") -> list[ResponseUsage]:
+        responses: list[ResponseUsage] = []
+        lines = source.splitlines()
+        status_re = re.compile(r"""(?:\.code|\.status|\.response_code)\s*(?:==|!=)\s*(\d{3})""")
+        field_re = re.compile(r"""(?:response|resp|res)\.(\w+)""")
+        for i, line in enumerate(lines, 1):
+            status_codes = tuple(m.group(1) for m in status_re.finditer(line))
+            fields = tuple(m.group(1) for m in field_re.finditer(line))
+            if status_codes or fields:
+                responses.append(ResponseUsage(filename, i, "get", "/", status_codes, fields))
+        return responses

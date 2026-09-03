@@ -63,6 +63,7 @@ def scan_and_fix(repository_id: int, merge: bool = True) -> dict:
             branch="argus/fix",
             merge=merge,
             vendor_slug=vendor_slug,
+            repository_id=repository_id,
         )
     except (GitHubApiError, OSError, ValueError) as exc:
         return {

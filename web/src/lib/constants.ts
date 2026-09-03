@@ -1,13 +1,3 @@
-export const VENDORS = [
-  { slug: "github", name: "GitHub" },
-  { slug: "stripe", name: "Stripe" },
-  { slug: "twilio", name: "Twilio" },
-  { slug: "slack", name: "Slack" },
-  { slug: "aws", name: "AWS" },
-  { slug: "azure", name: "Azure" },
-  { slug: "google_cloud", name: "Google Cloud" },
-] as const;
-
 export const LANGUAGES = [
   { id: "py", label: "Python", icon: "🐍" },
   { id: "js", label: "JavaScript", icon: "🟨" },
@@ -24,7 +14,17 @@ export const POLL_INTERVALS = {
   detectionRuns: 15_000,
   repositories: 30_000,
   vendors: 60_000,
+  pipelineActive: 3_000,
+  pipelineIdle: 30_000,
 } as const;
+
+export const PIPELINE_STEPS = [
+  { key: "downloading", label: "Downloading" },
+  { key: "scanning", label: "Scanning" },
+  { key: "fixing", label: "Fixing" },
+  { key: "pushing", label: "Pushing" },
+  { key: "waiting_for_ci", label: "Waiting for CI" },
+] as const;
 
 export const SEVERITY_COLORS: Record<string, string> = {
   breaking: "text-[var(--breaking)]",

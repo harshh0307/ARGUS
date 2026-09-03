@@ -17,12 +17,6 @@ from app.registry.vendors import list_vendors
 router = APIRouter(tags=["dashboard"])
 
 
-def _db_session(settings: Settings) -> Session:
-    if not settings.database_url:
-        return None
-    return open_session(settings)
-
-
 def _from_request(request: Request) -> Settings:
     return request.app.state.settings
 

@@ -45,6 +45,7 @@ class RepositoryIn(BaseModel):
 
 class RepositoryCreated(BaseModel):
     id: int
+    task_id: str | None = None
 
 
 class WebhookOut(BaseModel):
@@ -125,3 +126,83 @@ class MergeOut(BaseModel):
     repo: str
     pr_number: int
     task_id: str | None = None
+
+
+class PipelineRunOut(BaseModel):
+    id: int
+    repository_id: int
+    status: str
+    current_step: str | None = None
+    task_id: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    pr_number: int | None = None
+    pr_url: str | None = None
+    error_message: str | None = None
+    created_at: datetime
+
+
+class ActivityEventOut(BaseModel):
+    kind: str
+    timestamp: datetime
+    title: str
+    detail: str | None = None
+    status: str | None = None
+
+
+class VendorIn(BaseModel):
+    name: str
+    slug: str | None = None
+    spec_url: str | None = None
+    enabled: bool = True
+
+
+class VendorCreated(BaseModel):
+    slug: str
+
+
+# ── Auth schemas ────────────────────────────────────────────────────────
+
+
+class RegisterIn(BaseModel):
+    email: str
+    password: str
+    tenant_id: str | None = None
+
+
+class RegisterOut(BaseModel):
+    id: int
+    email: str
+    tenant_id: str
+
+
+class LoginIn(BaseModel):
+    email: str
+    password: str
+
+
+class TokenOut(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+
+
+class RefreshIn(BaseModel):
+    refresh_token: str
+
+
+class ApiKeyCreatedOut(BaseModel):
+    id: int
+    name: str
+    key: str
+    prefix: str
+    created_at: datetime
+
+
+class ApiKeyOut(BaseModel):
+    id: int
+    name: str
+    prefix: str
+    is_active: bool
+    created_at: datetime
+    last_used_at: datetime | None = None

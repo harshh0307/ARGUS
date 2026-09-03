@@ -34,6 +34,11 @@ class FixResult:
     success: bool
     patch: PatchSuggestion | None = None
     error: str | None = None
+    change_kind: str | None = None
+
+    def __str__(self) -> str:
+        status = "OK" if self.success else f"FAIL: {self.error}"
+        return f"{self.file}:{self.line} [{self.change_kind or '?'}] {status}"
 
 
 @dataclass

@@ -160,21 +160,153 @@ def _guard_endpoint_removed(content: str, impact: dict) -> str | None:
     return None
 
 
+# ── Additional semantic guards ──────────────────────────────────────────────
+
+def _guard_param_required(content: str, impact: dict) -> str | None:
+    """Ensure new required parameter is actually present in the call."""
+    param_name = impact.get("new_value") or impact.get("detail", "").split("'")[1] if "'" in impact.get("detail", "") else None
+    if not param_name:
+        return None
+    if param_name in content:
+        return None
+    return f"new required parameter '{param_name}' not found in patched code"
+
+
+def _guard_request_body_added(content: str, impact: dict) -> str | None:
+    """Ensure request body is now being sent when body was added."""
+    body_indicators = ["json=", "data=", "body=", "json:", "body:", "data:", "FormUrlEncodedContent", "MultiValueMap"]
+    for indicator in body_indicators:
+        if indicator in content:
+            return None
+    return "request body was added but no body content found in patched code"
+
+
+def _guard_request_body_required_changed(content: str, impact: dict) -> str | None:
+    """Ensure body presence matches the new required status."""
+    is_required = impact.get("new_value") is True or impact.get("new_value") == "true"
+    body_indicators = ["json=", "data=", "body=", "json:", "body:", "data:"]
+    has_body = any(ind in content for ind in body_indicators)
+    if is_required and not has_body:
+        return "request body is now required but no body content found in patched code"
+    return None
+
+
+def _guard_response_schema_removed(content: str, impact: dict) -> str | None:
+    """Ensure response handling block is updated when schema is removed."""
+    response_indicators = [".json()", ".text", ".content", "response.", "resp.", "res."]
+    has_response_access = any(ind in content for ind in response_indicators)
+    if has_response_access:
+        return "response schema was removed but response body is still being accessed"
+    return None
+
+
+def _guard_schema_type_changed(content: str, impact: dict) -> str | None:
+    """Ensure type conversion is applied when schema type changes."""
+    old_type = impact.get("old_value")
+    new_type = impact.get("new_value")
+    if not old_type or not new_type:
+        return None
+    type_conversions = {
+        ("string", "integer"): ["int(", "parseInt(", "strconv.Atoi("],
+        ("integer", "string"): ["str(", "String(", "toString()", "fmt.Sprintf("],
+        ("string", "number"): ["float(", "parseFloat(", "strconv.ParseFloat("],
+        ("number", "string"): ["str(", "String(", "toString()"],
+        ("boolean", "string"): ["str(", "String(", "toString()"],
+        ("string", "boolean"): ["bool(", "parseBool(", "Boolean("],
+    }
+    conversions = type_conversions.get((old_type, new_type), [])
+    for conv in conversions:
+        if conv in content:
+            return None
+    return f"schema type changed from {old_type} to {new_type} but no type conversion found in patched code"
+
+
+def _guard_schema_format_changed(content: str, impact: dict) -> str | None:
+    """Ensure format-dependent code is updated when format changes."""
+    old_format = impact.get("old_value")
+    new_format = impact.get("new_value")
+    if not old_format or not new_format:
+        return None
+    format_indicators = {
+        "date-time": ["datetime", "DateTime", "Timestamp", "time.Parse"],
+        "date": ["date", "Date", "time.Parse"],
+        "email": ["email", "Email", "mail.ParseAddress"],
+        "uri": ["url", "URL", "url.Parse"],
+        "uuid": ["uuid", "UUID", "uuid.NewRandom"],
+    }
+    old_indicators = format_indicators.get(old_format, [])
+    new_indicators = format_indicators.get(new_format, [])
+    if old_indicators and new_indicators:
+        has_old = any(ind in content for ind in old_indicators)
+        if has_old:
+            return f"format changed from {old_format} to {new_format} but old format handling still present"
+    return None
+
+
+def _guard_schema_property_type_changed(content: str, impact: dict) -> str | None:
+    """Ensure property access code handles new type."""
+    prop_name = impact.get("schema_path", "").split(".")[-1] if impact.get("schema_path") else None
+    if not prop_name:
+        return None
+    old_type = impact.get("old_value")
+    new_type = impact.get("new_value")
+    if not old_type or not new_type:
+        return None
+    type_conversions = {
+        ("string", "integer"): ["int(", "parseInt("],
+        ("integer", "string"): ["str(", "toString()"],
+        ("string", "number"): ["float(", "parseFloat("],
+        ("number", "string"): ["str(", "toString()"],
+    }
+    conversions = type_conversions.get((old_type, new_type), [])
+    for conv in conversions:
+        if conv in content and prop_name in content:
+            return None
+    return None
+
+
+def _guard_operation_deprecated(content: str, impact: dict) -> str | None:
+    """Ensure deprecation warning or migration comment is added."""
+    deprecation_indicators = ["deprecated", "DeprecationWarning", "warnings.warn", "# DEPRECATED", "# Migration"]
+    for indicator in deprecation_indicators:
+        if indicator.lower() in content.lower():
+            return None
+    return "operation was deprecated but no deprecation warning or migration comment found in patched code"
+
+
+def _guard_sunset_date(content: str, impact: dict) -> str | None:
+    """Ensure migration planning comment is added when sunset date is set."""
+    sunset_indicators = ["sunset", "migration", "# TODO", "# FIXME", "# MIGRATE"]
+    for indicator in sunset_indicators:
+        if indicator.lower() in content.lower():
+            return None
+    return "sunset date was set but no migration planning comment found in patched code"
+
+
 # ── Registry ────────────────────────────────────────────────────────────────
 
 SEMANTIC_GUARDS: dict[str, Callable[[str, dict], str | None]] = {
     ChangeKind.METHOD_CHANGED: _guard_method_changed,
     ChangeKind.PARAM_REMOVED: _guard_param_removed,
     ChangeKind.PARAM_TYPE_CHANGED: _guard_param_type_changed,
+    ChangeKind.PARAM_REQUIRED: _guard_param_required,
     ChangeKind.ENUM_VALUE_REMOVED: _guard_enum_value_removed,
     ChangeKind.RESPONSE_CODE_REMOVED: _guard_response_code_removed,
+    ChangeKind.RESPONSE_SCHEMA_REMOVED: _guard_response_schema_removed,
     ChangeKind.SECURITY_SCHEME_TYPE_CHANGED: _guard_security_scheme_type_changed,
     ChangeKind.SCHEMA_PROPERTY_REMOVED: _guard_schema_property_removed,
+    ChangeKind.SCHEMA_PROPERTY_TYPE_CHANGED: _guard_schema_property_type_changed,
+    ChangeKind.SCHEMA_TYPE_CHANGED: _guard_schema_type_changed,
+    ChangeKind.SCHEMA_FORMAT_CHANGED: _guard_schema_format_changed,
     ChangeKind.REQUIRED_FIELD_ADDED: _guard_required_field_added,
     ChangeKind.REQUEST_BODY_REMOVED: _guard_body_removed,
+    ChangeKind.REQUEST_BODY_ADDED: _guard_request_body_added,
+    ChangeKind.REQUEST_BODY_REQUIRED_CHANGED: _guard_request_body_required_changed,
     ChangeKind.OAUTH_SCOPE_REMOVED: _guard_oauth_scope_removed,
     ChangeKind.ENDPOINT_REMOVED: _guard_endpoint_removed,
     ChangeKind.HTTP_METHOD_REMOVED: _guard_method_changed,
+    ChangeKind.OPERATION_DEPRECATED: _guard_operation_deprecated,
+    ChangeKind.SUNSET_DATE: _guard_sunset_date,
 }
 
 

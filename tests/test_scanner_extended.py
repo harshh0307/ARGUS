@@ -5,7 +5,7 @@ BASE = "https://api.github.com"
 
 
 def _scan(scanner, root):
-    usages, _headers = scanner.scan(root)
+    usages, _headers, _bodies, _auths, _responses = scanner.scan(root)
     return usages
 
 

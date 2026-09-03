@@ -10,6 +10,13 @@ from app.db.engine import get_engine, init_db, session_factory
 from app.db.models import DetectionRun, Repository, Vendor
 from app.db.repository import set_default_engine
 
+AUTH_SETTINGS = {
+    "auth_secret_key": "test-secret-key-for-jwt",
+    "auth_algorithm": "HS256",
+    "access_token_expire_minutes": 30,
+    "refresh_token_expire_days": 7,
+}
+
 
 def make_app(database_url=None, webhook_secret=None, **overrides):
     defaults = {
@@ -21,6 +28,7 @@ def make_app(database_url=None, webhook_secret=None, **overrides):
         "github_app_private_key": None,
         "github_install_id": None,
     }
+    defaults.update(AUTH_SETTINGS)
     defaults.update(overrides)
     return create_app(Settings(**defaults))
 
@@ -62,6 +70,12 @@ def push_payload(owner="octo", repo="demo"):
     ).encode("utf-8")
 
 
+def register_and_login(client, email="test@example.com", password="secret123"):
+    client.post("/api/v1/auth/register", json={"email": email, "password": password})
+    resp = client.post("/api/v1/auth/login", json={"email": email, "password": password})
+    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
+
+
 def test_health_reports_no_database():
     client = TestClient(make_app(database_url=None))
     assert client.get("/health").json() == {"status": "ok", "database": False}
@@ -73,9 +87,12 @@ def test_health_reports_database(tmp_path):
     assert client.get("/health").json()["database"] is True
 
 
-def test_list_vendors():
-    client = TestClient(make_app())
-    response = client.get("/api/v1/vendors")
+def test_list_vendors(tmp_path):
+    engine = seeded_engine(tmp_path)
+    url = engine.url.render_as_string(hide_password=False)
+    client = TestClient(make_app(database_url=url))
+    headers = register_and_login(client)
+    response = client.get("/api/v1/vendors", headers=headers)
     assert response.status_code == 200
     slugs = {item["slug"] for item in response.json()}
     assert slugs == {"github", "stripe", "twilio", "slack", "aws", "azure", "google_cloud"}
@@ -83,21 +100,27 @@ def test_list_vendors():
     assert github["poll_interval_seconds"] == 21600
 
 
-def test_vendor_by_slug():
-    client = TestClient(make_app())
-    response = client.get("/api/v1/vendors/stripe")
+def test_vendor_by_slug(tmp_path):
+    engine = seeded_engine(tmp_path)
+    url = engine.url.render_as_string(hide_password=False)
+    client = TestClient(make_app(database_url=url))
+    headers = register_and_login(client)
+    response = client.get("/api/v1/vendors/stripe", headers=headers)
     assert response.status_code == 200
     assert response.json()["name"] == "Stripe"
 
 
-def test_vendor_by_slug_unknown():
-    client = TestClient(make_app())
-    assert client.get("/api/v1/vendors/nope").status_code == 404
+def test_vendor_by_slug_unknown(tmp_path):
+    engine = seeded_engine(tmp_path)
+    url = engine.url.render_as_string(hide_password=False)
+    client = TestClient(make_app(database_url=url))
+    headers = register_and_login(client)
+    assert client.get("/api/v1/vendors/nope", headers=headers).status_code == 404
 
 
 def test_detection_runs_require_database():
     client = TestClient(make_app(database_url=None))
-    assert client.get("/api/v1/detection-runs").status_code == 503
+    assert client.get("/api/v1/detection-runs").status_code in (401, 503)
 
 
 def test_detection_runs_listing(tmp_path):
@@ -118,7 +141,8 @@ def test_detection_runs_listing(tmp_path):
         ],
     )
     client = TestClient(make_app(database_url=url))
-    response = client.get("/api/v1/detection-runs")
+    headers = register_and_login(client)
+    response = client.get("/api/v1/detection-runs", headers=headers)
     assert response.status_code == 200
     rows = response.json()
     assert len(rows) == 1
@@ -126,33 +150,39 @@ def test_detection_runs_listing(tmp_path):
     assert rows[0]["breaking_count"] == 2
     assert rows[0]["changes"][0]["kind"] == "endpoint_removed"
 
-    one = client.get(f"/api/v1/detection-runs/{rows[0]['id']}")
+    one = client.get(f"/api/v1/detection-runs/{rows[0]['id']}", headers=headers)
     assert one.status_code == 200
     assert one.json()["new_digest"] == "new1"
 
-    assert client.get("/api/v1/detection-runs/999").status_code == 404
+    assert client.get("/api/v1/detection-runs/999", headers=headers).status_code == 404
 
 
-def test_repositories_register_and_list(tmp_path):
+def test_repositories_register_and_list(tmp_path, monkeypatch):
     engine = seeded_engine(tmp_path)
     url = engine.url.render_as_string(hide_password=False)
     client = TestClient(make_app(database_url=url))
+    headers = register_and_login(client)
+
+    from app.workers.celery_app import app as celery_app_mod
+
+    monkeypatch.setattr(celery_app_mod, "send_task", lambda *a, **kw: None)
 
     created = client.post(
         "/api/v1/repositories",
         json={"owner": "acme", "name": "website", "default_branch": "main"},
+        headers=headers,
     )
     assert created.status_code == 201
     repo_id = created.json()["id"]
     assert repo_id > 0
 
-    rows = client.get("/api/v1/repositories").json()
+    rows = client.get("/api/v1/repositories", headers=headers).json()
     assert len(rows) == 1
     assert rows[0]["owner"] == "acme"
     assert rows[0]["is_active"] is True
 
     again = client.post(
-        "/api/v1/repositories", json={"owner": "acme", "name": "website"}
+        "/api/v1/repositories", json={"owner": "acme", "name": "website"}, headers=headers
     )
     assert again.json()["id"] == repo_id
 
@@ -268,6 +298,7 @@ def test_webhook_installation_created_registers_install(tmp_path):
     engine = seeded_engine(tmp_path)
     url = engine.url.render_as_string(hide_password=False)
     client = TestClient(make_app(database_url=url, webhook_secret="s3cret"))
+    headers = register_and_login(client)
     response = _post_webhook(
         client,
         "installation",
@@ -278,7 +309,7 @@ def test_webhook_installation_created_registers_install(tmp_path):
     )
     assert response.status_code == 200
     assert response.json()["reason"] == "installation created -> owner acme active=True"
-    installs = client.get("/api/v1/installations").json()
+    installs = client.get("/api/v1/installations", headers=headers).json()
     assert len(installs) == 1
     assert installs[0]["install_id"] == 42
     assert installs[0]["owner"] == "acme"
@@ -289,6 +320,7 @@ def test_webhook_installation_deleted_deactivates(tmp_path):
     engine = seeded_engine(tmp_path)
     url = engine.url.render_as_string(hide_password=False)
     client = TestClient(make_app(database_url=url, webhook_secret="s3cret"))
+    headers = register_and_login(client)
     _post_webhook(
         client,
         "installation",
@@ -306,7 +338,7 @@ def test_webhook_installation_deleted_deactivates(tmp_path):
         },
     )
     assert response.json()["reason"] == "installation deleted -> owner acme active=False"
-    installs = client.get("/api/v1/installations").json()
+    installs = client.get("/api/v1/installations", headers=headers).json()
     assert installs[0]["is_active"] is False
 
 

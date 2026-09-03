@@ -140,8 +140,9 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         (tmp_path / "app.py").write_text(ORIGINAL_APP, encoding="utf-8")
-        usages = ApiScanner(base_url="https://api.github.com").scan(tmp_path)
-        impacts = assess_impact(usages, detection["changes"])
+        scanner = ApiScanner(base_url="https://api.github.com")
+        usages, headers, bodies, auths, responses = scanner.scan(tmp_path)
+        impacts = assess_impact(usages, headers, bodies, auths, responses, detection["changes"])
 
     impacts = [replace(i, usage=replace(i.usage, file="app.py")) for i in impacts]
     print(f"[demo] {len(impacts)} impacted call sites in app.py")

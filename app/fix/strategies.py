@@ -225,12 +225,19 @@ register_strategy(
     FixStrategy(
         kind=ChangeKind.PARAM_REQUIRED,
         description="Parameter became required — add with default/example value",
+        pattern=r"(params|query|headers)\s*=\s*\{([^}]*)\}",
+        replacement_template=None,  # use function for dynamic replacement
         validator=_validate_param_added,
-        llm_required=True,
+        guard=None,
+        llm_required=False,
         prompt_instructions=(
             "This parameter is now required. Add it to the function call "
             "with an appropriate default value or example from the spec."
         ),
+        examples=[
+            {"before": "requests.get(url, params={'q': val})", "after": "requests.get(url, params={'q': val, 'per_page': 30})"},
+            {"before": "client.get(url)", "after": "client.get(url, params={'required_param': 'default'})"},
+        ],
     )
 )
 
@@ -259,13 +266,19 @@ register_strategy(
     FixStrategy(
         kind=ChangeKind.ENUM_VALUE_REMOVED,
         description="Enum value no longer valid",
+        pattern=r"""['"](\w+)['"]""",
+        replacement_template=None,  # use function for dynamic replacement
         validator=_validate_enum_value_removed,
         guard=_guard_enum_value_removed,
-        llm_required=True,
+        llm_required=False,
         prompt_instructions=(
             "This enum value is no longer valid. Replace it with the "
             "closest valid alternative from the new enum values."
         ),
+        examples=[
+            {"before": "status = 'closed'", "after": "status = 'completed'"},
+            {"before": "type = 'bug'", "after": "type = 'issue'"},
+        ],
     )
 )
 
@@ -295,11 +308,17 @@ register_strategy(
     FixStrategy(
         kind=ChangeKind.REQUEST_BODY_ADDED,
         description="Request body now required",
-        llm_required=True,
+        pattern=r"\.(get|post|put|patch|delete)\s*\([^)]*\)",
+        replacement_template=None,  # use function for dynamic replacement
+        llm_required=False,
         prompt_instructions=(
             "This endpoint now requires a request body. Add the body "
             "argument with the correct structure from the new spec."
         ),
+        examples=[
+            {"before": "requests.post(url)", "after": "requests.post(url, json={'field': 'value'})"},
+            {"before": "client.put(url)", "after": "client.put(url, json=payload)"},
+        ],
     )
 )
 
@@ -307,11 +326,17 @@ register_strategy(
     FixStrategy(
         kind=ChangeKind.REQUEST_BODY_REQUIRED_CHANGED,
         description="Request body required flag changed",
-        llm_required=True,
+        pattern=r"\.(get|post|put|patch|delete)\s*\([^)]*\)",
+        replacement_template=None,  # use function for dynamic replacement
+        llm_required=False,
         prompt_instructions=(
             "The request body required status changed. Update the call "
             "to add or remove the body argument as appropriate."
         ),
+        examples=[
+            {"before": "requests.post(url, json=data)", "after": "requests.post(url)"},
+            {"before": "requests.post(url)", "after": "requests.post(url, json=data)"},
+        ],
     )
 )
 
@@ -341,11 +366,17 @@ register_strategy(
     FixStrategy(
         kind=ChangeKind.RESPONSE_SCHEMA_REMOVED,
         description="Response schema removed",
-        llm_required=True,
+        pattern=r"""(response|resp|res)\[['"](\w+)['"]\]""",
+        replacement_template=None,  # use function for dynamic replacement
+        llm_required=False,
         prompt_instructions=(
             "The response schema for this status code has been removed. "
             "Update error handling or remove the response handling block."
         ),
+        examples=[
+            {"before": "data = response['removed_field']", "after": "data = response.get('available_field')"},
+            {"before": "user = resp.json()['nested']", "after": "user = resp.json()"},
+        ],
     )
 )
 
@@ -354,12 +385,18 @@ register_strategy(
     FixStrategy(
         kind=ChangeKind.SCHEMA_TYPE_CHANGED,
         description="Schema type changed (e.g. string → integer)",
+        pattern=r"(\w+)\s*(?:=\s*|:\s*)(\w+)",
+        replacement_template=None,  # use function for dynamic replacement
         validator=_validate_type_changed,
-        llm_required=True,
+        llm_required=False,
         prompt_instructions=(
             "The schema type changed. Add type conversion or update "
             "the code to handle the new type correctly."
         ),
+        examples=[
+            {"before": "user_id = response['id']", "after": "user_id = int(response['id'])"},
+            {"before": "count = data['total']", "after": "count = str(data['total'])"},
+        ],
     )
 )
 
@@ -367,11 +404,17 @@ register_strategy(
     FixStrategy(
         kind=ChangeKind.SCHEMA_FORMAT_CHANGED,
         description="Schema format changed (e.g. int32 → int64)",
-        llm_required=True,
+        pattern=r"(datetime|date|uuid|uri|email|timestamp)",
+        replacement_template=None,  # use function for dynamic replacement
+        llm_required=False,
         prompt_instructions=(
             "The schema format changed. Update code that depends on "
             "the specific format (e.g. date format, integer size)."
         ),
+        examples=[
+            {"before": "datetime.strptime(val, '%Y-%m-%d')", "after": "datetime.fromisoformat(val)"},
+            {"before": "uuid.UUID(val)", "after": "val"},  # if format changed from uuid to string
+        ],
     )
 )
 
@@ -379,12 +422,18 @@ register_strategy(
     FixStrategy(
         kind=ChangeKind.SCHEMA_PROPERTY_TYPE_CHANGED,
         description="Schema property type changed",
+        pattern=r"(\w+)\s*(?:=\s*|:\s*)(\w+)",
+        replacement_template=None,  # use function for dynamic replacement
         validator=_validate_type_changed,
-        llm_required=True,
+        llm_required=False,
         prompt_instructions=(
             "A property's type changed. Update code that accesses "
             "or constructs this property to use the new type."
         ),
+        examples=[
+            {"before": "data['count'] = response['total']", "after": "data['count'] = int(response['total'])"},
+            {"before": "item['name'] = obj['title']", "after": "item['name'] = str(obj['title'])"},
+        ],
     )
 )
 
@@ -392,11 +441,17 @@ register_strategy(
     FixStrategy(
         kind=ChangeKind.SCHEMA_PROPERTY_REMOVED,
         description="Schema property removed",
-        llm_required=True,
+        pattern=r"""\[['"](\w+)['"]\]|\.(\w+)""",
+        replacement_template=None,  # use function for dynamic replacement
+        llm_required=False,
         prompt_instructions=(
             "A property has been removed from the schema. Remove any "
             "code that accesses this property."
         ),
+        examples=[
+            {"before": "data = response['deprecated_field']", "after": "data = response.get('new_field')"},
+            {"before": "obj.old_prop", "after": "obj.new_prop"},
+        ],
     )
 )
 
@@ -412,11 +467,17 @@ register_strategy(
     FixStrategy(
         kind=ChangeKind.REQUIRED_FIELD_ADDED,
         description="Field became required",
-        llm_required=True,
+        pattern=r"\{([^}]*)\}",
+        replacement_template=None,  # use function for dynamic replacement
+        llm_required=False,
         prompt_instructions=(
             "A field has become required. Ensure the code provides "
             "this field when constructing the request body."
         ),
+        examples=[
+            {"before": "payload = {'name': name}", "after": "payload = {'name': name, 'email': email}"},
+            {"before": "data = {'title': title}", "after": "data = {'title': title, 'body': body}"},
+        ],
     )
 )
 
@@ -433,11 +494,17 @@ register_strategy(
     FixStrategy(
         kind=ChangeKind.SECURITY_SCHEME_TYPE_CHANGED,
         description="Authentication type changed",
-        llm_required=True,
+        pattern=r"(Bearer|API[_-]?Key|OAuth2|Basic)",
+        replacement_template=None,  # use function for dynamic replacement
+        llm_required=False,
         prompt_instructions=(
             "The authentication type changed (e.g. from Bearer to API key). "
             "Update the authentication code to match the new scheme."
         ),
+        examples=[
+            {"before": "headers['Authorization'] = f'Bearer {token}'", "after": "headers['X-Api-Key'] = api_key"},
+            {"before": "headers['Authorization'] = f'Bearer {token}'", "after": "headers['Authorization'] = f'Basic {b64}'"},
+        ],
     )
 )
 
@@ -445,11 +512,17 @@ register_strategy(
     FixStrategy(
         kind=ChangeKind.OAUTH_SCOPE_REMOVED,
         description="OAuth scope no longer available",
-        llm_required=True,
+        pattern=r"""(scope|scopes)\s*=\s*['"][^'"]+['"]""",
+        replacement_template=None,  # use function for dynamic replacement
+        llm_required=False,
         prompt_instructions=(
             "An OAuth scope has been removed. Update the authorization "
             "request to remove this scope."
         ),
+        examples=[
+            {"before": "scopes = ['read', 'write', 'admin']", "after": "scopes = ['read', 'write']"},
+            {"before": "scope='user:read user:write'", "after": "scope='user:read'"},
+        ],
     )
 )
 
@@ -458,11 +531,17 @@ register_strategy(
     FixStrategy(
         kind=ChangeKind.OPERATION_DEPRECATED,
         description="Endpoint deprecated",
-        llm_required=True,
+        pattern=r"(requests|httpx|client)\.\w+\s*\(",
+        replacement_template=None,  # use function for dynamic replacement
+        llm_required=False,
         prompt_instructions=(
             "This endpoint is deprecated. If a replacement exists, "
             "migrate to it. Otherwise, add a deprecation warning comment."
         ),
+        examples=[
+            {"before": "requests.get(url)", "after": "# DEPRECATED: Use new_endpoint instead\nrequests.get(url)"},
+            {"before": "client.post(url)", "after": "# TODO: Migrate to new_endpoint\nclient.post(url)"},
+        ],
     )
 )
 
@@ -470,11 +549,17 @@ register_strategy(
     FixStrategy(
         kind=ChangeKind.SUNSET_DATE,
         description="Sunset date set — endpoint will be removed",
-        llm_required=True,
+        pattern=r"(requests|httpx|client)\.\w+\s*\(",
+        replacement_template=None,  # use function for dynamic replacement
+        llm_required=False,
         prompt_instructions=(
             "This endpoint has a sunset date. Plan migration to the "
             "replacement endpoint before the sunset date."
         ),
+        examples=[
+            {"before": "requests.get(url)", "after": "# SUNSET: Migrate before 2025-01-01\nrequests.get(url)"},
+            {"before": "client.post(url)", "after": "# TODO: Migrate before sunset\nclient.post(url)"},
+        ],
     )
 )
 
@@ -693,10 +778,17 @@ register_strategy(
     FixStrategy(
         kind=ChangeKind.HTTP_METHOD_REMOVED,
         description="HTTP method removed from path",
-        llm_required=True,
+        pattern=r"\.(get|post|put|patch|delete|head|options)\s*\(",
+        replacement_template=None,  # use function for dynamic replacement
+        guard=_guard_method_changed,
+        llm_required=False,
         prompt_instructions=(
             "An HTTP method has been removed from this path. "
             "Update or remove any code that uses this method."
         ),
+        examples=[
+            {"before": "requests.delete(url)", "after": "requests.post(url, json={'action': 'archive'})"},
+            {"before": "client.put(url)", "after": "client.patch(url)"},
+        ],
     )
 )

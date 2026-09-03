@@ -4,18 +4,28 @@ import type {
   DetectionRunOut,
   RepositoryOut,
   ChangelogHitOut,
-  PollOut,
-  DetectOut,
-  PipelineOut,
-  MergeOut,
+  PipelineRunOut,
+  ActivityEventOut,
+  RepositoryCreated,
+  VendorCreated,
 } from "./types";
 
 const BASE = "/api/v1";
 
+function getAuthHeaders(): Record<string, string> {
+  if (typeof window === "undefined") return {};
+  const token = localStorage.getItem("argus_token");
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders(),
+      ...init?.headers,
+    },
   });
   if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
   return res.json();
@@ -28,27 +38,63 @@ async function postJSON<T>(path: string, body?: unknown): Promise<T> {
   });
 }
 
+async function putJSON<T>(path: string, body: unknown): Promise<T> {
+  return fetchJSON<T>(path, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+}
+
+async function deleteJSON(path: string): Promise<void> {
+  const res = await fetch(path, {
+    method: "DELETE",
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+}
+
 export const api = {
   health: () => fetchJSON<HealthResponse>("/health"),
   vendors: () => fetchJSON<VendorOut[]>(`${BASE}/vendors`),
   vendor: (slug: string) => fetchJSON<VendorOut>(`${BASE}/vendors/${slug}`),
+  createVendor: (data: { name: string; slug?: string; spec_url?: string; enabled?: boolean }) =>
+    postJSON<VendorCreated>(`${BASE}/vendors`, data),
+  updateVendor: (slug: string, data: { name: string; spec_url?: string; enabled?: boolean }) =>
+    putJSON<VendorOut>(`${BASE}/vendors/${slug}`, data),
+  deleteVendor: (slug: string) => deleteJSON(`${BASE}/vendors/${slug}`),
+  uploadSpec: async (slug: string, file: File) => {
+    const res = await fetch(`${BASE}/vendors/${slug}/spec`, {
+      method: "POST",
+      body: file,
+      headers: {
+        "Content-Type": "application/octet-stream",
+        ...getAuthHeaders(),
+      },
+    });
+    if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+    return res.json() as Promise<{ slug: string; spec_file: string; size: number }>;
+  },
   detectionRuns: (limit = 50) =>
     fetchJSON<DetectionRunOut[]>(`${BASE}/detection-runs?limit=${limit}`),
   detectionRun: (id: number) =>
     fetchJSON<DetectionRunOut>(`${BASE}/detection-runs/${id}`),
   repositories: () => fetchJSON<RepositoryOut[]>(`${BASE}/repositories`),
+  registerRepository: (data: { owner: string; name: string; vendor_slug?: string; default_branch?: string }) =>
+    postJSON<RepositoryCreated>(`${BASE}/repositories`, data),
+  triggerPipeline: (repository_id: number, merge = true) =>
+    postJSON<{ dispatched: boolean; repository_id: number; task_id: string | null }>(
+      `${BASE}/pipeline`,
+      { repository_id, merge }
+    ),
+  pipelineRuns: (limit = 20) =>
+    fetchJSON<PipelineRunOut[]>(`${BASE}/pipeline-runs?limit=${limit}`),
+  pipelineRun: (id: number) =>
+    fetchJSON<PipelineRunOut>(`${BASE}/pipeline-runs/${id}`),
+  activity: (limit = 30) =>
+    fetchJSON<ActivityEventOut[]>(`${BASE}/activity?limit=${limit}`),
   searchChangelog: (q: string, vendor?: string, limit = 10) => {
     const params = new URLSearchParams({ q, limit: String(limit) });
     if (vendor) params.set("vendor", vendor);
     return fetchJSON<ChangelogHitOut[]>(`${BASE}/search/changelog?${params}`);
   },
-  triggerPoll: () => postJSON<PollOut>(`${BASE}/poll`),
-  triggerDetect: (vendor_slug: string) =>
-    postJSON<DetectOut>(`${BASE}/detect`, { vendor_slug }),
-  triggerPipeline: (repository_id: number, merge = true) =>
-    postJSON<PipelineOut>(`${BASE}/pipeline`, { repository_id, merge }),
-  triggerRerun: (repository_id: number) =>
-    postJSON<PipelineOut>(`${BASE}/fix/rerun`, { repository_id }),
-  triggerMerge: (owner: string, repo: string, pr_number: number) =>
-    postJSON<MergeOut>(`${BASE}/pr/merge`, { owner, repo, pr_number }),
 };

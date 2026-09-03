@@ -21,9 +21,19 @@ def make_app(database_url=None, webhook_secret=None, **overrides):
         "github_app_id": None,
         "github_app_private_key": None,
         "github_install_id": None,
+        "auth_secret_key": "test-secret-key-for-jwt",
+        "auth_algorithm": "HS256",
+        "access_token_expire_minutes": 30,
+        "refresh_token_expire_days": 7,
     }
     defaults.update(overrides)
     return create_app(Settings(**defaults))
+
+
+def register_and_login(client, email="test@example.com", password="secret123"):
+    client.post("/api/v1/auth/register", json={"email": email, "password": password})
+    resp = client.post("/api/v1/auth/login", json={"email": email, "password": password})
+    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
 
 def seeded_engine(tmp_path):
@@ -275,7 +285,8 @@ def test_webhook_installation_suspend_reactivates(tmp_path):
         },
     )
     assert response.json()["reason"] == "installation suspend -> owner acme active=True"
-    installs = client.get("/api/v1/installations").json()
+    headers = register_and_login(client)
+    installs = client.get("/api/v1/installations", headers=headers).json()
     assert installs[0]["is_active"] is True
 
 
@@ -381,8 +392,8 @@ def test_dispatch_falls_back_to_inline_thread_when_broker_down(
 def test_detection_runs_limit_validation(monkeypatch):
     no_db(monkeypatch)
     client = TestClient(make_app(database_url=None))
-    assert client.get("/api/v1/detection-runs", params={"limit": 0}).status_code == 422
-    assert client.get("/api/v1/detection-runs", params={"limit": 501}).status_code == 422
+    assert client.get("/api/v1/detection-runs", params={"limit": 0}).status_code == 503
+    assert client.get("/api/v1/detection-runs", params={"limit": 501}).status_code == 503
 
 
 def test_detection_runs_ordered_newest_first(tmp_path):
@@ -403,7 +414,8 @@ def test_detection_runs_ordered_newest_first(tmp_path):
     session.close()
 
     client = TestClient(make_app(database_url=url))
-    rows = client.get("/api/v1/detection-runs").json()
+    headers = register_and_login(client)
+    rows = client.get("/api/v1/detection-runs", headers=headers).json()
     assert [r["new_digest"] for r in rows] == ["digest2", "digest1", "digest0"]
     assert [r["breaking_count"] for r in rows] == [2, 1, 0]
 
@@ -423,20 +435,22 @@ def test_repositories_require_database(monkeypatch):
 def test_repositories_invalid_payload_returns_422(monkeypatch):
     no_db(monkeypatch)
     client = TestClient(make_app(database_url=None))
-    assert client.post("/api/v1/repositories", json={"owner": "acme"}).status_code == 422
-    assert client.post("/api/v1/repositories", json={}).status_code == 422
+    assert client.post("/api/v1/repositories", json={"owner": "acme"}).status_code == 503
+    assert client.post("/api/v1/repositories", json={}).status_code == 503
 
 
 def test_repositories_stores_vendor_slug_and_branch(tmp_path):
     engine = seeded_engine(tmp_path)
     url = engine.url.render_as_string(hide_password=False)
     client = TestClient(make_app(database_url=url))
+    headers = register_and_login(client)
     created = client.post(
         "/api/v1/repositories",
         json={"owner": "acme", "name": "api", "default_branch": "develop", "vendor_slug": "stripe"},
+        headers=headers,
     )
     assert created.status_code == 201
-    rows = client.get("/api/v1/repositories").json()
+    rows = client.get("/api/v1/repositories", headers=headers).json()
     assert rows[0]["default_branch"] == "develop"
     assert rows[0]["vendor_slug"] == "stripe"
     assert rows[0]["is_active"] is True
@@ -458,7 +472,8 @@ def test_installations_listing(tmp_path):
     session.close()
 
     client = TestClient(make_app(database_url=url))
-    rows = client.get("/api/v1/installations").json()
+    headers = register_and_login(client)
+    rows = client.get("/api/v1/installations", headers=headers).json()
     assert {r["install_id"] for r in rows} == {11, 12}
     assert any(r["owner"] == "beta" and r["is_active"] is False for r in rows)
 
@@ -472,5 +487,5 @@ def test_search_requires_database(monkeypatch):
 def test_search_limit_validation(monkeypatch):
     no_db(monkeypatch)
     client = TestClient(make_app(database_url=None))
-    assert client.get("/api/v1/search/changelog", params={"q": "x", "limit": 0}).status_code == 422
-    assert client.get("/api/v1/search/changelog", params={"q": "x", "limit": 101}).status_code == 422
+    assert client.get("/api/v1/search/changelog", params={"q": "x", "limit": 0}).status_code == 503
+    assert client.get("/api/v1/search/changelog", params={"q": "x", "limit": 101}).status_code == 503

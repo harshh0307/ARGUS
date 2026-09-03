@@ -18,12 +18,22 @@
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U argus"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   redis:
     restart: unless-stopped
     image: redis:7
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   worker:
     restart: unless-stopped
@@ -32,8 +42,10 @@
     entrypoint: ["celery", "-A", "app.workers.celery_app"]
     env_file: .env
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     command: ["worker", "--loglevel=info"]
 
   beat:
@@ -44,8 +56,10 @@
     working_dir: /tmp
     env_file: .env
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     command: ["beat", "--loglevel=info"]
 
   api:
@@ -55,11 +69,53 @@
     entrypoint: ["uvicorn", "app.api.main:app"]
     env_file: .env
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     ports:
       - "8000:8000"
     command: ["--host", "0.0.0.0", "--port", "8000"]
+
+  api-dev:
+    build: .
+    image: argus:local
+    entrypoint: ["uvicorn", "app.api.main:app"]
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./app:/app/app
+    command: ["--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+  test:
+    build: .
+    image: argus:local
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["python", "-m", "pytest", "tests", "-q", "--tb=short"]
+    volumes:
+      - ./tests:/app/tests
+
+  dashboard:
+    build:
+      context: ./web
+      dockerfile: ../Dockerfile.web
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://api:8000
+    depends_on:
+      - api
 
 volumes:
   pgdata:

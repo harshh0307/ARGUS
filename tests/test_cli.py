@@ -57,7 +57,7 @@ class FakeScanner:
         self.usages = usages
 
     def scan(self, root):
-        return self.usages, []
+        return self.usages, [], [], [], []
 
 
 def test_parser_has_all_commands():
@@ -87,7 +87,7 @@ def test_scan_reports_no_impacts(monkeypatch, capsys):
         monkeypatch,
         run_detection=lambda s, **kw: {"changes": [change()]},
         ApiScanner=lambda **kw: FakeScanner([]),
-        assess_impact=lambda usages, changes: [],
+        assess_impact=lambda usages, headers, bodies, auths, responses, changes: [],
     )
     assert cli.cmd_scan(SimpleNamespace(dir=".")) == 0
     assert "0 impacted" in capsys.readouterr().out
@@ -98,7 +98,7 @@ def test_scan_reports_impacts(monkeypatch, capsys):
         monkeypatch,
         run_detection=lambda s, **kw: {"changes": [change()]},
         ApiScanner=lambda **kw: FakeScanner([usage()]),
-        assess_impact=lambda usages, changes: [impact()],
+        assess_impact=lambda usages, headers, bodies, auths, responses, changes: [impact()],
     )
     assert cli.cmd_scan(SimpleNamespace(dir=".")) == 0
     assert "1 impacted" in capsys.readouterr().out
@@ -111,7 +111,7 @@ def test_fix_dry_run_prints_diff(monkeypatch, tmp_path, capsys):
         monkeypatch,
         run_detection=lambda s, **kw: {"changes": [change()]},
         ApiScanner=lambda **kw: FakeScanner([usage()]),
-        assess_impact=lambda usages, changes: [impact()],
+        assess_impact=lambda usages, headers, bodies, auths, responses, changes: [impact()],
         build_suggestion_model=lambda s, vendor_slug=None: object(),
         fix_impact_on_content=lambda *a, **k: ("import requests\nresp = []\n", None),
     )
@@ -140,7 +140,7 @@ def test_fix_applies_in_directory(monkeypatch, tmp_path):
         monkeypatch,
         run_detection=lambda s, **kw: {"changes": [change()]},
         ApiScanner=lambda **kw: FakeScanner([usage()]),
-        assess_impact=lambda usages, changes: [impact()],
+        assess_impact=lambda usages, headers, bodies, auths, responses, changes: [impact()],
         build_suggestion_model=lambda s, vendor_slug=None: object(),
         run_fix=fake_run_fix,
     )
@@ -155,7 +155,7 @@ def test_fix_missing_key_returns_2(monkeypatch, tmp_path, capsys):
         monkeypatch,
         run_detection=lambda s, **kw: {"changes": [change()]},
         ApiScanner=lambda **kw: FakeScanner([usage()]),
-        assess_impact=lambda usages, changes: [impact()],
+        assess_impact=lambda usages, headers, bodies, auths, responses, changes: [impact()],
         build_suggestion_model=lambda s, vendor_slug=None: (_ for _ in ()).throw(ValueError("no key")),
     )
     args = SimpleNamespace(dir=str(tmp_path), dry_run=True, max_attempts=None)
@@ -223,7 +223,7 @@ def test_pr_command_runs_full_loop(monkeypatch, tmp_path, capsys):
         run_detection=lambda s, **kw: {"changes": [change()]},
         GitHubClient=lambda token: fake_client,
         ApiScanner=lambda **kw: FakeScanner([usage()]),
-        assess_impact=lambda usages, changes: [impact()],
+        assess_impact=lambda usages, headers, bodies, auths, responses, changes: [impact()],
         build_suggestion_model=lambda s, vendor_slug=None: object(),
         run_pr_loop=fake_pr_loop,
     )
@@ -259,7 +259,7 @@ def test_pr_command_merges_when_passed_and_flag_set(monkeypatch, tmp_path, capsy
         run_detection=lambda s, **kw: {"changes": [change()]},
         GitHubClient=lambda token: fake_client,
         ApiScanner=lambda **kw: FakeScanner([usage()]),
-        assess_impact=lambda usages, changes: [impact()],
+        assess_impact=lambda usages, headers, bodies, auths, responses, changes: [impact()],
         build_suggestion_model=lambda s, vendor_slug=None: object(),
         run_pr_loop=fake_pr_loop,
     )
@@ -289,7 +289,7 @@ def test_pr_command_does_not_merge_when_failed(monkeypatch, tmp_path):
         run_detection=lambda s, **kw: {"changes": [change()]},
         GitHubClient=lambda token: fake_client,
         ApiScanner=lambda **kw: FakeScanner([usage()]),
-        assess_impact=lambda usages, changes: [impact()],
+        assess_impact=lambda usages, headers, bodies, auths, responses, changes: [impact()],
         build_suggestion_model=lambda s, vendor_slug=None: object(),
         run_pr_loop=fake_pr_loop,
     )
@@ -320,7 +320,7 @@ def test_pr_command_merge_rejection_warns(monkeypatch, tmp_path, capsys):
         run_detection=lambda s, **kw: {"changes": [change()]},
         GitHubClient=lambda token: fake_client,
         ApiScanner=lambda **kw: FakeScanner([usage()]),
-        assess_impact=lambda usages, changes: [impact()],
+        assess_impact=lambda usages, headers, bodies, auths, responses, changes: [impact()],
         build_suggestion_model=lambda s, vendor_slug=None: object(),
         run_pr_loop=fake_pr_loop,
     )

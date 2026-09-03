@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
-from app.scan.models import HeaderUsage, Usage
+from app.scan.models import AuthUsage, BodyUsage, HeaderUsage, ResponseUsage, Usage
 
 HTTP_METHODS = ("get", "post", "put", "patch", "delete", "head", "options")
 
@@ -88,9 +89,12 @@ class ApiScanner:
             return True
         return lang in self.languages
 
-    def scan(self, root: str | Path) -> tuple[list[Usage], list[HeaderUsage]]:
+    def scan(self, root: str | Path) -> tuple[list[Usage], list[HeaderUsage], list[BodyUsage], list[AuthUsage], list[ResponseUsage]]:
         usages: list[Usage] = []
         headers: list[HeaderUsage] = []
+        bodies: list[BodyUsage] = []
+        auths: list[AuthUsage] = []
+        responses: list[ResponseUsage] = []
         root_path = Path(root)
         for path in root_path.rglob("*"):
             if path.is_dir() or self._ignored(path):
@@ -99,61 +103,106 @@ class ApiScanner:
             if not self._should_scan(suffix):
                 continue
             rel = path.relative_to(root_path).as_posix()
-            file_usages, file_headers = self._scan_file(path, rel)
+            file_usages, file_headers, file_bodies, file_auths, file_responses = self._scan_file(path, rel)
             usages.extend(file_usages)
             headers.extend(file_headers)
-        return sorted(usages, key=lambda u: (u.file, u.line, u.method, u.path)), sorted(headers, key=lambda h: (h.file, h.line, h.header_name))
+            bodies.extend(file_bodies)
+            auths.extend(file_auths)
+            responses.extend(file_responses)
+        return (
+            sorted(usages, key=lambda u: (u.file, u.line, u.method, u.path)),
+            sorted(headers, key=lambda h: (h.file, h.line, h.header_name)),
+            sorted(bodies, key=lambda b: (b.file, b.line, b.method, b.path)),
+            sorted(auths, key=lambda a: (a.file, a.line)),
+            sorted(responses, key=lambda r: (r.file, r.line)),
+        )
 
-    def scan_source(self, source: str, filename: str = "<string>", language: str | None = None) -> tuple[list[Usage], list[HeaderUsage]]:
+    def scan_source(self, source: str, filename: str = "<string>", language: str | None = None) -> tuple[list[Usage], list[HeaderUsage], list[BodyUsage], list[AuthUsage], list[ResponseUsage]]:
         language = language or language_for_file(filename)
         if language == "js":
             from app.scan.js_scanner import JsScanner
 
             scanner = JsScanner(base_url=self.base_url)
-            return scanner.scan_source(source, filename), scanner.scan_headers(source, filename)
+            return (
+                scanner.scan_source(source, filename),
+                scanner.scan_headers(source, filename),
+                scanner.scan_body(source, filename),
+                scanner.scan_auth(source, filename),
+                scanner.scan_response(source, filename),
+            )
         if language == "go":
             from app.scan.go_scanner import GoScanner
 
             scanner = GoScanner(base_url=self.base_url)
-            return scanner.scan_source(source, filename), scanner.scan_headers(source, filename)
+            return (
+                scanner.scan_source(source, filename),
+                scanner.scan_headers(source, filename),
+                scanner.scan_body(source, filename),
+                scanner.scan_auth(source, filename),
+                scanner.scan_response(source, filename),
+            )
         if language == "ruby":
             from app.scan.ruby_scanner import RubyScanner
 
             scanner = RubyScanner(base_url=self.base_url)
-            return scanner.scan_source(source, filename), scanner.scan_headers(source, filename)
+            return (
+                scanner.scan_source(source, filename),
+                scanner.scan_headers(source, filename),
+                scanner.scan_body(source, filename),
+                scanner.scan_auth(source, filename),
+                scanner.scan_response(source, filename),
+            )
         if language == "java":
             from app.scan.java_scanner import JavaScanner
 
             scanner = JavaScanner(base_url=self.base_url)
-            return scanner.scan_source(source, filename), scanner.scan_headers(source, filename)
+            return (
+                scanner.scan_source(source, filename),
+                scanner.scan_headers(source, filename),
+                scanner.scan_body(source, filename),
+                scanner.scan_auth(source, filename),
+                scanner.scan_response(source, filename),
+            )
         if language == "php":
             from app.scan.php_scanner import PhpScanner
 
             scanner = PhpScanner(base_url=self.base_url)
-            return scanner.scan_source(source, filename), scanner.scan_headers(source, filename)
+            return (
+                scanner.scan_source(source, filename),
+                scanner.scan_headers(source, filename),
+                scanner.scan_body(source, filename),
+                scanner.scan_auth(source, filename),
+                scanner.scan_response(source, filename),
+            )
         if language == "cs":
             from app.scan.cs_scanner import CSharpScanner
 
             scanner = CSharpScanner(base_url=self.base_url)
-            return scanner.scan_source(source, filename), scanner.scan_headers(source, filename)
+            return (
+                scanner.scan_source(source, filename),
+                scanner.scan_headers(source, filename),
+                scanner.scan_body(source, filename),
+                scanner.scan_auth(source, filename),
+                scanner.scan_response(source, filename),
+            )
         # Python (default)
         try:
             tree = ast.parse(source, filename=filename)
         except SyntaxError:
-            return [], []
+            return [], [], [], [], []
         constants = self._module_constants(tree)
         visitor = _CallVisitor(filename, self.base_url, constants)
         visitor.visit(tree)
-        return visitor.usages, _scan_headers_python(source, filename)
+        return visitor.usages, _scan_headers_python(source, filename), _scan_body_python(source, filename, self.base_url), _scan_auth_python(source, filename), _scan_response_python(source, filename, self.base_url)
 
     def scan_file(self, path: Path) -> list[Usage]:
         return self._scan_file(path, path)
 
-    def _scan_file(self, path: Path, filename: Path) -> tuple[list[Usage], list[HeaderUsage]]:
+    def _scan_file(self, path: Path, filename: Path) -> tuple[list[Usage], list[HeaderUsage], list[BodyUsage], list[AuthUsage], list[ResponseUsage]]:
         try:
             source = path.read_text(encoding="utf-8-sig")
         except (OSError, UnicodeDecodeError):
-            return [], []
+            return [], [], [], [], []
         return self.scan_source(source, str(filename))
 
     def _ignored(self, path: Path) -> bool:
@@ -335,3 +384,88 @@ def _scan_headers_python(source: str, filename: str) -> list[HeaderUsage]:
             if name.lower() not in {h.lower() for h in _AUTH_HEADERS}:
                 headers.append(HeaderUsage(filename, i, name, None, "header"))
     return headers
+
+
+_BODY_FIELD_RE = re.compile(r"""['"](\w+)['"]\s*:""")
+_JSON_BODY_RE = re.compile(r"""(?:json|data|body)\s*=\s*\{([^}]+)\}""", re.DOTALL)
+_FORM_DATA_RE = re.compile(r"""(?:data|body)\s*=\s*(?:urllib\.parse\.urlencode|urlencode)\s*\(\s*\{([^}]+)\}""")
+_CONTENT_TYPE_RE = re.compile(r"""['"]Content-Type['"]\s*:\s*['"]([^'"]+)['"]""")
+
+
+def _scan_body_python(source: str, filename: str, base_url: str) -> list[BodyUsage]:
+    """Scan Python source for request body field usage."""
+    bodies: list[BodyUsage] = []
+    lines = source.splitlines()
+    for i, line in enumerate(lines, 1):
+        # Detect json={}, data={}, body={} patterns
+        for m in _JSON_BODY_RE.finditer(line):
+            body_text = m.group(1)
+            fields = tuple(sorted(set(_BODY_FIELD_RE.findall(body_text))))
+            if fields:
+                # Infer method/path from context
+                method = "post"
+                for kw in ("json=", "data=", "body="):
+                    if kw in line:
+                        break
+                bodies.append(BodyUsage(filename, i, method, "/", fields, None))
+        # Detect form data
+        for m in _FORM_DATA_RE.finditer(line):
+            body_text = m.group(1)
+            fields = tuple(sorted(set(_BODY_FIELD_RE.findall(body_text))))
+            if fields:
+                bodies.append(BodyUsage(filename, i, "post", "/", fields, "application/x-www-form-urlencoded"))
+        # Detect Content-Type
+        ct_match = _CONTENT_TYPE_RE.search(line)
+        if ct_match and i > 0:
+            bodies.append(BodyUsage(filename, i, "post", "/", (), ct_match.group(1)))
+    return bodies
+
+
+_AUTH_BEARER_RE = re.compile(r"""['"]Bearer\s+['"].*?['"]([\w.=-]+)['"]""", re.IGNORECASE)
+_AUTH_HEADER_RE = re.compile(r"""headers\s*\[['"]Authorization['"]\]\s*=\s*f?['"]Bearer\s+{?(\w+)}?""")
+_AUTH_API_KEY_RE = re.compile(r"""['"](?:X-Api-Key|X-Auth-Token|Api-Key|X-Access-Token)['"]?\s*[:=]\s*['"]?(\w+)['"]?""")
+_AUTH_BASIC_RE = re.compile(r"""(?:requests|httpx|aiohttp)\.\w+\([^)]*auth\s*=\s*\(""")
+_AUTH_OAUTH2_RE = re.compile(r"""['"](?:oauth2|bearer|token)['"]\s*[:=]\s*['"]?(\w+)['"]?""", re.IGNORECASE)
+_AUTH_PARAM_RE = re.compile(r"""(?:api_key|apikey|token)\s*=\s*['"]?(\w+)['"]?""")
+
+
+def _scan_auth_python(source: str, filename: str) -> list[AuthUsage]:
+    """Scan Python source for authentication patterns."""
+    auths: list[AuthUsage] = []
+    lines = source.splitlines()
+    for i, line in enumerate(lines, 1):
+        # Bearer token in headers
+        for m in _AUTH_BEARER_RE.finditer(line):
+            auths.append(AuthUsage(filename, i, "bearer", "Authorization", None, None))
+        # Bearer token via header assignment
+        if _AUTH_HEADER_RE.search(line):
+            auths.append(AuthUsage(filename, i, "bearer", "Authorization", None, None))
+        # API key headers
+        for m in _AUTH_API_KEY_RE.finditer(line):
+            auths.append(AuthUsage(filename, i, "api_key", m.group(0).split(":")[0].strip().strip("'\""), None, None))
+        # Basic auth
+        if _AUTH_BASIC_RE.search(line):
+            auths.append(AuthUsage(filename, i, "basic", "Authorization", None, None))
+        # OAuth2
+        for m in _AUTH_OAUTH2_RE.finditer(line):
+            auths.append(AuthUsage(filename, i, "oauth2", None, None, None))
+        # Query param API key
+        for m in _AUTH_PARAM_RE.finditer(line):
+            auths.append(AuthUsage(filename, i, "api_key", None, m.group(0).split("=")[0].strip(), None))
+    return auths
+
+
+_STATUS_CODE_RE = re.compile(r"""(?:status_code|\.status|\.statusCode)\s*(?:==|!=|>=|<=|>|<)\s*(\d{3})""")
+_RESPONSE_FIELD_RE = re.compile(r"""(?:response|res|resp)\.(\w+)""")
+
+
+def _scan_response_python(source: str, filename: str, base_url: str) -> list[ResponseUsage]:
+    """Scan Python source for response handling patterns."""
+    responses: list[ResponseUsage] = []
+    lines = source.splitlines()
+    for i, line in enumerate(lines, 1):
+        status_codes = tuple(m.group(1) for m in _STATUS_CODE_RE.finditer(line))
+        response_fields = tuple(m.group(1) for m in _RESPONSE_FIELD_RE.finditer(line))
+        if status_codes or response_fields:
+            responses.append(ResponseUsage(filename, i, "get", "/", status_codes, response_fields))
+    return responses

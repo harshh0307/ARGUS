@@ -71,10 +71,11 @@ def record_snapshot(
 
 
 def record_detection_run(
-    session: Session, vendor_slug: str, result: dict
+    session: Session, vendor_slug: str, result: dict, tenant_id: str | None = None,
 ) -> DetectionRun:
     row = DetectionRun(
         vendor_slug=vendor_slug,
+        tenant_id=tenant_id,
         old_digest=result.get("old_digest"),
         new_digest=result.get("new_digest"),
         breaking_count=result.get("breaking_count", 0),
@@ -94,7 +95,10 @@ def record_detection_run(
     return row
 
 
-def persist_detection(settings: Settings, vendor_slug: str, result: dict, spec: VendorSpec) -> DetectionRun | None:
+def persist_detection(
+    settings: Settings, vendor_slug: str, result: dict, spec: VendorSpec,
+    tenant_id: str | None = None,
+) -> DetectionRun | None:
     if not settings.database_url:
         return None
     session = open_session(settings)
@@ -104,7 +108,7 @@ def persist_detection(settings: Settings, vendor_slug: str, result: dict, spec: 
             record_snapshot(session, vendor_slug, result["old_digest"])
         if result.get("new_digest"):
             record_snapshot(session, vendor_slug, result["new_digest"])
-        run = record_detection_run(session, vendor_slug, result)
+        run = record_detection_run(session, vendor_slug, result, tenant_id=tenant_id)
         session.flush()
         embedder = build_embedder(settings)
         record_changelog_entries(
@@ -113,6 +117,7 @@ def persist_detection(settings: Settings, vendor_slug: str, result: dict, spec: 
             run,
             run.changes,
             embedder=embedder,
+            tenant_id=tenant_id,
         )
         session.commit()
         return run
@@ -129,6 +134,7 @@ def upsert_repository(
     name: str,
     default_branch: str | None = None,
     vendor_slug: str = "github",
+    tenant_id: str | None = None,
 ) -> Repository:
     row = session.execute(
         select(Repository).where(
@@ -137,32 +143,35 @@ def upsert_repository(
     ).scalar_one_or_none()
     if row is None:
         row = Repository(
-            owner=owner, name=name, default_branch=default_branch, vendor_slug=vendor_slug
+            owner=owner, name=name, default_branch=default_branch,
+            vendor_slug=vendor_slug, tenant_id=tenant_id,
         )
         session.add(row)
     else:
         row.default_branch = default_branch or row.default_branch
         row.vendor_slug = vendor_slug or row.vendor_slug
+        if tenant_id is not None:
+            row.tenant_id = tenant_id
     return row
 
 
-def list_active_repositories(session: Session) -> list[Repository]:
-    return list(
-        session.execute(
-            select(Repository).where(Repository.is_active.is_(True))
-        ).scalars()
-    )
+def list_active_repositories(session: Session, tenant_id: str | None = None) -> list[Repository]:
+    stmt = select(Repository).where(Repository.is_active.is_(True))
+    if tenant_id is not None:
+        stmt = stmt.where(Repository.tenant_id == tenant_id)
+    return list(session.execute(stmt).scalars())
 
 
-def list_active_repos_for_vendor(session: Session, vendor_slug: str) -> list[Repository]:
-    return list(
-        session.execute(
-            select(Repository).where(
-                Repository.is_active.is_(True),
-                Repository.vendor_slug == vendor_slug,
-            )
-        ).scalars()
+def list_active_repos_for_vendor(
+    session: Session, vendor_slug: str, tenant_id: str | None = None
+) -> list[Repository]:
+    stmt = select(Repository).where(
+        Repository.is_active.is_(True),
+        Repository.vendor_slug == vendor_slug,
     )
+    if tenant_id is not None:
+        stmt = stmt.where(Repository.tenant_id == tenant_id)
+    return list(session.execute(stmt).scalars())
 
 
 def touch_repository(session: Session, repo: Repository) -> None:
@@ -170,22 +179,34 @@ def touch_repository(session: Session, repo: Repository) -> None:
 
 
 def upsert_app_installation(
-    session: Session, install_id: int, owner: str, is_active: bool = True
+    session: Session, install_id: int, owner: str, is_active: bool = True,
+    tenant_id: str | None = None,
 ) -> AppInstallation:
     row = session.execute(
         select(AppInstallation).where(AppInstallation.install_id == install_id)
     ).scalar_one_or_none()
     if row is None:
-        row = AppInstallation(install_id=install_id, owner=owner, is_active=is_active)
+        row = AppInstallation(
+            install_id=install_id, owner=owner, is_active=is_active,
+            tenant_id=tenant_id,
+        )
         session.add(row)
     else:
         row.owner = owner
         row.is_active = is_active
+        if tenant_id is not None:
+            row.tenant_id = tenant_id
     return row
 
 
-def list_installations(session: Session) -> list[AppInstallation]:
-    return list(session.execute(select(AppInstallation)).scalars())
+def list_installations(session: Session, tenant_id: str | None = None) -> list[AppInstallation]:
+    stmt = select(AppInstallation)
+    if tenant_id is not None:
+        stmt = stmt.where(
+            (AppInstallation.tenant_id == tenant_id)
+            | (AppInstallation.tenant_id.is_(None))
+        )
+    return list(session.execute(stmt).scalars())
 
 
 def record_changelog_entries(
@@ -194,6 +215,7 @@ def record_changelog_entries(
     run: DetectionRun,
     changes: list,
     embedder=None,
+    tenant_id: str | None = None,
 ) -> list[ChangelogEntry]:
     texts = [
         embed_text(c.get("kind", "change"), c.get("path", ""), c.get("method", ""), c.get("detail"))
@@ -205,6 +227,7 @@ def record_changelog_entries(
         rows.append(
             ChangelogEntry(
                 vendor_slug=vendor_slug,
+                tenant_id=tenant_id,
                 run_id=run.id,
                 kind=c.get("kind", "change"),
                 path=c.get("path", ""),
@@ -223,10 +246,16 @@ def search_changelog(
     vendor_slug: str | None = None,
     limit: int = 10,
     embedder=None,
+    tenant_id: str | None = None,
 ) -> list[tuple[ChangelogEntry, float]]:
     statement = select(ChangelogEntry)
     if vendor_slug:
         statement = statement.where(ChangelogEntry.vendor_slug == vendor_slug)
+    if tenant_id is not None:
+        statement = statement.where(
+            (ChangelogEntry.tenant_id == tenant_id)
+            | (ChangelogEntry.tenant_id.is_(None))
+        )
     rows = list(session.execute(statement).scalars())
     if not rows:
         return []

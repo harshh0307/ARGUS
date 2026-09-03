@@ -3,6 +3,8 @@
 import { useVendors } from "@/hooks/use-vendors";
 import { useDetectionRuns } from "@/hooks/use-detection-runs";
 import { Card, CardContent } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
+import { StaggerContainer, StaggerItem } from "@/components/ui/motion";
 import { Database, Code2, Search, GitPullRequest } from "lucide-react";
 
 export function AnalyticsGrid() {
@@ -44,31 +46,48 @@ export function AnalyticsGrid() {
     },
   ];
 
+  const isLoading = vendors.length === 0;
+
+  if (isLoading) {
+    return (
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <Card key={i} className="bg-[var(--card)] border-[var(--border)]">
+            <CardContent className="p-5 space-y-3">
+              <Skeleton className="h-3 w-32" />
+              <Skeleton className="h-8 w-20" />
+              <Skeleton className="h-2.5 w-48" />
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    );
+  }
+
   return (
-    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+    <StaggerContainer className="grid grid-cols-1 md:grid-cols-4 gap-4" staggerDelay={0.08}>
       {cards.map((card) => (
-        <Card
-          key={card.title}
-          className="bg-[var(--card)] border-[var(--border)]"
-        >
-          <CardContent className="p-5">
-            <div className="flex items-start justify-between">
-              <div className="space-y-1">
-                <p className="text-xs text-[var(--muted-foreground)]">
-                  {card.title}
-                </p>
-                <p className={`text-3xl font-bold ${card.accent}`}>
-                  {card.value}
-                </p>
-                <p className="text-[10px] text-[var(--muted-foreground)]">
-                  {card.subtitle}
-                </p>
+        <StaggerItem key={card.title}>
+          <Card className="bg-[var(--card)] border-[var(--border)]">
+            <CardContent className="p-5">
+              <div className="flex items-start justify-between">
+                <div className="space-y-1">
+                  <p className="text-xs text-[var(--muted-foreground)]">
+                    {card.title}
+                  </p>
+                  <p className={`text-3xl font-bold ${card.accent}`}>
+                    {card.value}
+                  </p>
+                  <p className="text-[10px] text-[var(--muted-foreground)]">
+                    {card.subtitle}
+                  </p>
+                </div>
+                <card.icon className={`h-5 w-5 ${card.accent} opacity-50`} />
               </div>
-              <card.icon className={`h-5 w-5 ${card.accent} opacity-50`} />
-            </div>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        </StaggerItem>
       ))}
-    </div>
+    </StaggerContainer>
   );
 }

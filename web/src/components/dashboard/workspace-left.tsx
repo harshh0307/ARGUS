@@ -5,12 +5,12 @@ import { useChangelogSearch } from "@/hooks/use-changelog-search";
 import { useState } from "react";
 import { SEVERITY_BG } from "@/lib/constants";
 import { truncateHash, formatRelativeTime } from "@/lib/utils";
-import { api } from "@/lib/api";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Skeleton } from "@/components/ui/skeleton";
+import { StaggerContainer, StaggerItem } from "@/components/ui/motion";
+import { toast } from "sonner";
 import {
-  RefreshCw,
   Search,
   AlertTriangle,
   PlusCircle,
@@ -19,20 +19,14 @@ import {
 } from "lucide-react";
 
 export function WorkspaceLeft() {
-  const { runs, selectedRun, setSelectedRun, refresh } = useDetectionRuns();
+  const { runs, selectedRun, setSelectedRun } = useDetectionRuns();
   const [searchQuery, setSearchQuery] = useState("");
   const { results: searchResults, isLoading: searchLoading } =
     useChangelogSearch(searchQuery);
-  const [polling, setPolling] = useState(false);
 
-  const handlePoll = async () => {
-    setPolling(true);
-    try {
-      await api.triggerPoll();
-      setTimeout(refresh, 2000);
-    } finally {
-      setPolling(false);
-    }
+  const handleCopyDigest = (digest: string) => {
+    navigator.clipboard.writeText(digest);
+    toast.success("Copied", { description: "Digest copied to clipboard" });
   };
 
   const getSeverityIcon = (severity: string) => {
@@ -53,19 +47,10 @@ export function WorkspaceLeft() {
       {/* Header */}
       <div className="p-4 border-b border-[var(--border)] space-y-3">
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold">OpenAPI Semantic Diff &amp; Ingestion</h2>
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-7 text-[10px] border-[var(--border)] bg-[var(--surface)]"
-            onClick={handlePoll}
-            disabled={polling}
-          >
-            <RefreshCw
-              className={`h-3 w-3 mr-1 ${polling ? "animate-spin" : ""}`}
-            />
-            {polling ? "Polling..." : "Trigger Poll"}
-          </Button>
+          <h2 className="text-sm font-semibold">Detection Runs</h2>
+          <span className="text-[10px] text-[var(--muted-foreground)]">
+            Auto-detected by Argus
+          </span>
         </div>
         <div className="relative">
           <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-[var(--muted-foreground)]" />
@@ -83,40 +68,45 @@ export function WorkspaceLeft() {
         {searchQuery ? (
           <div className="p-3 space-y-2">
             {searchLoading && (
-              <div className="text-xs text-[var(--muted-foreground)] text-center py-4">
-                Searching...
+              <div className="space-y-2 py-2">
+                {Array.from({ length: 3 }).map((_, i) => (
+                  <Skeleton key={i} className="h-16 w-full rounded" />
+                ))}
               </div>
             )}
-            {searchResults.map((hit) => (
-              <div
-                key={hit.id}
-                className="bg-[var(--surface)] rounded p-2 border border-[var(--border)] text-xs space-y-1"
-              >
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--semantic)]/10 text-[var(--semantic)] border border-[var(--semantic)]/30">
-                    {hit.vendor_slug}
-                  </span>
-                  <span
-                    className={`text-[10px] px-1.5 py-0.5 rounded border ${
-                      SEVERITY_BG[hit.kind.includes("removed") ? "breaking" : "additive"] ?? ""
-                    }`}
-                  >
-                    {hit.kind}
-                  </span>
-                  <span className="text-[10px] text-[var(--semantic)] ml-auto font-mono">
-                    {(hit.score * 100).toFixed(0)}%
-                  </span>
-                </div>
-                <div className="font-mono text-[10px] text-[var(--muted-foreground)]">
-                  {hit.method.toUpperCase()} {hit.path}
-                </div>
-                {hit.detail && (
-                  <div className="text-[10px] text-[var(--muted-foreground)]">
-                    {hit.detail}
-                  </div>
-                )}
-              </div>
-            ))}
+            {!searchLoading && searchResults.length > 0 && (
+              <StaggerContainer staggerDelay={0.04}>
+                {searchResults.map((hit) => (
+                  <StaggerItem key={hit.id}>
+                    <div className="bg-[var(--surface)] rounded p-2 border border-[var(--border)] text-xs space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--semantic)]/10 text-[var(--semantic)] border border-[var(--semantic)]/30">
+                          {hit.vendor_slug}
+                        </span>
+                        <span
+                          className={`text-[10px] px-1.5 py-0.5 rounded border ${
+                            SEVERITY_BG[hit.kind.includes("removed") ? "breaking" : "additive"] ?? ""
+                          }`}
+                        >
+                          {hit.kind}
+                        </span>
+                        <span className="text-[10px] text-[var(--semantic)] ml-auto font-mono">
+                          {(hit.score * 100).toFixed(0)}%
+                        </span>
+                      </div>
+                      <div className="font-mono text-[10px] text-[var(--muted-foreground)]">
+                        {hit.method.toUpperCase()} {hit.path}
+                      </div>
+                      {hit.detail && (
+                        <div className="text-[10px] text-[var(--muted-foreground)]">
+                          {hit.detail}
+                        </div>
+                      )}
+                    </div>
+                  </StaggerItem>
+                ))}
+              </StaggerContainer>
+            )}
             {!searchLoading && searchResults.length === 0 && searchQuery.length > 2 && (
               <div className="text-xs text-[var(--muted-foreground)] text-center py-4">
                 No results found
@@ -126,61 +116,71 @@ export function WorkspaceLeft() {
         ) : (
           <div className="p-3 space-y-2">
             {runs.length === 0 ? (
-              <div className="text-xs text-[var(--muted-foreground)] text-center py-8">
-                No detection runs yet. Click &quot;Trigger Poll&quot; to start.
+              <div className="text-xs text-[var(--muted-foreground)] text-center py-8 space-y-2">
+                <div className="text-lg">⏳</div>
+                <div>Waiting for first detection run</div>
+                <div className="text-[10px]">Argus checks vendors automatically on a schedule</div>
               </div>
             ) : (
-              runs.map((run) => (
-                <button
-                  key={run.id}
-                  onClick={() => setSelectedRun(run)}
-                  className={`w-full text-left bg-[var(--surface)] rounded p-2 border text-xs space-y-1 transition-colors ${
-                    selectedRun?.id === run.id
-                      ? "border-[var(--agent)] bg-[var(--agent)]/5"
-                      : "border-[var(--border)] hover:border-[var(--muted-foreground)]"
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-mono text-[10px] text-[var(--muted-foreground)]">
-                      Run #{run.id}
-                    </span>
-                    <span className="text-[10px] text-[var(--muted-foreground)]">
-                      {formatRelativeTime(run.created_at)}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--semantic)]/10 text-[var(--semantic)]">
-                      {run.vendor_slug}
-                    </span>
-                    {run.breaking_count > 0 && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--breaking)]/10 text-[var(--breaking)]">
-                        {run.breaking_count} breaking
-                      </span>
-                    )}
-                    {run.additive_count > 0 && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--passed)]/10 text-[var(--passed)]">
-                        {run.additive_count} additive
-                      </span>
-                    )}
-                  </div>
-                  {run.old_digest && run.new_digest && (
-                    <div className="flex items-center gap-1 text-[10px] font-mono text-[var(--muted-foreground)]">
-                      <span>{truncateHash(run.old_digest)}</span>
-                      <span>&rarr;</span>
-                      <span>{truncateHash(run.new_digest)}</span>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          navigator.clipboard.writeText(run.new_digest ?? "");
-                        }}
-                        className="ml-1 hover:text-[var(--foreground)]"
-                      >
-                        <Copy className="h-2.5 w-2.5" />
-                      </button>
-                    </div>
-                  )}
-                </button>
-              ))
+              <StaggerContainer staggerDelay={0.04}>
+                {runs.map((run) => (
+                  <StaggerItem key={run.id}>
+                    <button
+                      onClick={() => {
+                        setSelectedRun(run);
+                        toast.info(`Run #${run.id} selected`, {
+                          description: `${run.changes.length} changes — ${run.vendor_slug}`,
+                        });
+                      }}
+                      className={`w-full text-left bg-[var(--surface)] rounded p-2 border text-xs space-y-1 transition-colors ${
+                        selectedRun?.id === run.id
+                          ? "border-[var(--agent)] bg-[var(--agent)]/5"
+                          : "border-[var(--border)] hover:border-[var(--muted-foreground)]"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-mono text-[10px] text-[var(--muted-foreground)]">
+                          Run #{run.id}
+                        </span>
+                        <span className="text-[10px] text-[var(--muted-foreground)]">
+                          {formatRelativeTime(run.created_at)}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--semantic)]/10 text-[var(--semantic)]">
+                          {run.vendor_slug}
+                        </span>
+                        {run.breaking_count > 0 && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--breaking)]/10 text-[var(--breaking)]">
+                            {run.breaking_count} breaking
+                          </span>
+                        )}
+                        {run.additive_count > 0 && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--passed)]/10 text-[var(--passed)]">
+                            {run.additive_count} additive
+                          </span>
+                        )}
+                      </div>
+                      {run.old_digest && run.new_digest && (
+                        <div className="flex items-center gap-1 text-[10px] font-mono text-[var(--muted-foreground)]">
+                          <span>{truncateHash(run.old_digest)}</span>
+                          <span>&rarr;</span>
+                          <span>{truncateHash(run.new_digest)}</span>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleCopyDigest(run.new_digest ?? "");
+                            }}
+                            className="ml-1 hover:text-[var(--foreground)]"
+                          >
+                            <Copy className="h-2.5 w-2.5" />
+                          </button>
+                        </div>
+                      )}
+                    </button>
+                  </StaggerItem>
+                ))}
+              </StaggerContainer>
             )}
           </div>
         )}
@@ -197,24 +197,25 @@ export function WorkspaceLeft() {
               No changes detected
             </div>
           ) : (
-            selectedRun.changes.map((change, i) => (
-              <div
-                key={i}
-                className="flex items-center gap-2 text-[10px] py-1"
-              >
-                <span
-                  className={`flex items-center gap-1 px-1.5 py-0.5 rounded border ${
-                    SEVERITY_BG[change.severity] ?? ""
-                  }`}
-                >
-                  {getSeverityIcon(change.severity)}
-                  {change.severity}
-                </span>
-                <span className="font-mono text-[var(--muted-foreground)]">
-                  {change.method.toUpperCase()} {change.path}
-                </span>
-              </div>
-            ))
+            <StaggerContainer staggerDelay={0.03}>
+              {selectedRun.changes.map((change, i) => (
+                <StaggerItem key={i}>
+                  <div className="flex items-center gap-2 text-[10px] py-1">
+                    <span
+                      className={`flex items-center gap-1 px-1.5 py-0.5 rounded border ${
+                        SEVERITY_BG[change.severity] ?? ""
+                      }`}
+                    >
+                      {getSeverityIcon(change.severity)}
+                      {change.severity}
+                    </span>
+                    <span className="font-mono text-[var(--muted-foreground)]">
+                      {change.method.toUpperCase()} {change.path}
+                    </span>
+                  </div>
+                </StaggerItem>
+              ))}
+            </StaggerContainer>
           )}
         </div>
       )}

@@ -96,3 +96,21 @@ body {
 .animate-pulse-dot {
   animation: pulse-dot 2s ease-in-out infinite;
 }
+
+/* Theme transition — smooth color switch on theme toggle */
+@media (prefers-reduced-motion: no-preference) {
+  *:not([data-sonner-toaster]) {
+    transition-property: background-color, color, border-color, box-shadow;
+    transition-timing-function: ease;
+    transition-duration: 0.2s;
+  }
+}
+
+/* Reduced motion — disable all non-essential animations */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

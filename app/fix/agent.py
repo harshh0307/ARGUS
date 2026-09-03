@@ -274,7 +274,14 @@ def build_fix_graph(
         if err:
             return {"error": err}
 
-        # 3. Patch validation - line number, file path, diff
+        # 3. General semantic guards from registry
+        from app.fix.semantic_guards import run_semantic_guard
+
+        err = run_semantic_guard(state["patched_content"], state["impact"])
+        if err:
+            return {"error": err}
+
+        # 4. Patch validation - line number, file path, diff
         if state.get("patch") and state.get("impact"):
             patch_errors = validator.validate(
                 state["patch"],
@@ -368,7 +375,7 @@ def _still_calls_error(
 ) -> str | None:
     if base_url is None or impact.get("change_kind") != "endpoint_removed":
         return None
-    usages, _headers = ApiScanner(base_url=base_url).scan_source(
+    usages, _headers, _bodies, _auths, _responses = ApiScanner(base_url=base_url).scan_source(
         content, filename="patched", language=language
     )
     for usage in usages:
@@ -402,8 +409,16 @@ def _invoke_graph(graph, state: dict) -> dict:
         return {"error": f"fix agent crashed: {type(exc).__name__}: {str(exc)[:500]}", "patched_content": None}
 
 
+_GRAPH_MODEL_COUNTER: int = 0
+
+
 def _get_or_build_graph(suggestion_model, max_attempts: int, base_url: str | None, cache: dict):
-    key = (id(suggestion_model), max_attempts, base_url)
+    global _GRAPH_MODEL_COUNTER
+    # Use a unique counter to avoid id() reuse after garbage collection
+    if not hasattr(suggestion_model, "_graph_cache_id"):
+        _GRAPH_MODEL_COUNTER += 1
+        suggestion_model._graph_cache_id = _GRAPH_MODEL_COUNTER
+    key = (suggestion_model._graph_cache_id, max_attempts, base_url)
     if key not in cache:
         cache[key] = build_fix_graph(suggestion_model, max_attempts, base_url)
     return cache[key]
@@ -451,10 +466,27 @@ def run_fix(
     vendor_guidance: str | None = None,
     new_spec_context: str | None = None,
 ) -> list[FixResult]:
+    from app.fix.strategies import get_strategy
+
     graph = _get_or_build_graph(suggestion_model, max_attempts, base_url, _GRAPH_CACHE)
     contents: dict[str, str] = {}
     results: list[FixResult] = []
     for impact in impacts:
+        change_kind = impact.change.kind.value if hasattr(impact.change.kind, 'value') else str(impact.change.kind)
+
+        # Skip informational changes (no fix needed)
+        strategy = get_strategy(change_kind)
+        if strategy and not strategy.llm_required and not strategy.pattern:
+            results.append(
+                FixResult(
+                    file=impact.usage.file,
+                    line=impact.usage.line,
+                    success=True,
+                    change_kind=change_kind,
+                )
+            )
+            continue
+
         path = Path(impact.usage.file)
         if path not in contents:
             contents[path] = path.read_text(encoding="utf-8-sig")
@@ -481,6 +513,7 @@ def run_fix(
                 success=success,
                 patch=final.get("patch"),
                 error=final.get("error"),
+                change_kind=change_kind,
             )
         )
         if success:

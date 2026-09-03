@@ -65,27 +65,63 @@ export interface HealthResponse {
   database: boolean;
 }
 
-export interface PollOut {
-  dispatched: boolean;
-  task_id: string | null;
-}
-
-export interface DetectOut {
-  dispatched: boolean;
-  vendor_slug: string;
-  task_id: string | null;
-}
-
-export interface PipelineOut {
-  dispatched: boolean;
+export interface PipelineRunOut {
+  id: number;
   repository_id: number;
+  status: string;
+  current_step: string | null;
+  task_id: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  pr_number: number | null;
+  pr_url: string | null;
+  error_message: string | null;
+  created_at: string;
+}
+
+export interface ActivityEventOut {
+  kind: string;
+  timestamp: string;
+  title: string;
+  detail: string | null;
+  status: string | null;
+}
+
+export interface RepositoryCreated {
+  id: number;
   task_id: string | null;
 }
 
-export interface MergeOut {
-  dispatched: boolean;
-  owner: string;
-  repo: string;
-  pr_number: number;
-  task_id: string | null;
+export interface VendorCreated {
+  slug: string;
+}
+
+export interface UserOut {
+  id: number;
+  email: string;
+  tenant_id: string;
+  is_admin: boolean;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface TokenOut {
+  access_token: string;
+  refresh_token: string;
+  token_type: string;
+}
+
+export interface ApiKeyOut {
+  id: number;
+  name: string;
+  key_prefix: string;
+  created_at: string;
+  last_used_at: string | null;
+}
+
+export interface ApiKeyCreatedOut {
+  id: number;
+  name: string;
+  key: string;
+  key_prefix: string;
 }

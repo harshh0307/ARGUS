@@ -1,10 +1,13 @@
 "use client";
 
+import { useDetectionRuns } from "@/hooks/use-detection-runs";
 import { WorkspaceLeft } from "./workspace-left";
 import { WorkspaceMiddle } from "./workspace-middle";
 import { WorkspaceRight } from "./workspace-right";
 
 export function Workspace() {
+  const { selectedRun } = useDetectionRuns();
+
   return (
     <div
       className="grid grid-cols-12 gap-4"
@@ -17,7 +20,7 @@ export function Workspace() {
         <WorkspaceMiddle />
       </div>
       <div className="col-span-12 lg:col-span-4">
-        <WorkspaceRight />
+        <WorkspaceRight key={selectedRun?.id ?? "none"} />
       </div>
     </div>
   );
