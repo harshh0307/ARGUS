@@ -8,6 +8,7 @@ import type {
   ActivityEventOut,
   RepositoryCreated,
   VendorCreated,
+  SpecUploadOut,
 } from "./types";
 
 const BASE = "/api/v1";
@@ -72,7 +73,14 @@ export const api = {
       },
     });
     if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
-    return res.json() as Promise<{ slug: string; spec_file: string; size: number }>;
+    return res.json() as Promise<SpecUploadOut>;
+  },
+  downloadSpec: async (slug: string): Promise<Blob> => {
+    const res = await fetch(`${BASE}/vendors/${slug}/spec`, {
+      headers: getAuthHeaders(),
+    });
+    if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+    return res.blob();
   },
   detectionRuns: (limit = 50) =>
     fetchJSON<DetectionRunOut[]>(`${BASE}/detection-runs?limit=${limit}`),
