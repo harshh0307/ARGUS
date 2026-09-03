@@ -72,6 +72,22 @@ class SpecFetcher:
         return self._cache
 
     def fetch(self, url: str, etag: str | None = None) -> FetchResult | None:
+        # Handle local file paths
+        if url.startswith(("data/", "/", "./")):
+            import json as json_mod
+            from pathlib import Path
+
+            path = Path(url)
+            if not path.exists():
+                return None
+            text = path.read_text(encoding="utf-8")
+            spec_format = "yaml" if path.suffix in (".yaml", ".yml") else "json"
+            if spec_format == "yaml":
+                content = yaml.safe_load(text)
+            else:
+                content = json_mod.loads(text)
+            return FetchResult(content=content, spec_format=spec_format)
+
         # Check cache first
         cached = self._cache.get(url)
         if cached is not None:

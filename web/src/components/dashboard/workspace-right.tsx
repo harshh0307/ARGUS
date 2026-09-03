@@ -9,6 +9,7 @@ import { useActivity } from "@/hooks/use-activity";
 import { useHealth } from "@/hooks/use-health";
 import { useDetectionRuns } from "@/hooks/use-detection-runs";
 import { formatRelativeTime } from "@/lib/utils";
+import { PipelinePanel } from "./pipeline-panel";
 import {
   Activity,
   Check,
@@ -27,7 +28,7 @@ const STATUS_CONFIG: Record<string, { color: string; icon: typeof Check; label: 
 };
 
 export function WorkspaceRight() {
-  const { events, latestPipeline, pipelineStatus, isLoading } = useActivity();
+  const { events, pipelineStatus, isLoading } = useActivity();
   const { data: health } = useHealth();
   const { runs } = useDetectionRuns();
 
@@ -108,33 +109,10 @@ export function WorkspaceRight() {
 
         <Separator />
 
-        {/* Latest Pipeline */}
-        {latestPipeline && (
-          <>
-            <div className="space-y-3">
-              <Label className="text-[10px] font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
-                Latest Pipeline
-              </Label>
-              <div className="bg-[var(--surface)] rounded-lg p-3 border border-[var(--border)] space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium">{latestPipeline.title}</span>
-                  <Badge variant="outline" className={`text-[9px] ${STATUS_CONFIG[latestPipeline.status ?? ""]?.color ?? ""}`}>
-                    {latestPipeline.status}
-                  </Badge>
-                </div>
-                {latestPipeline.detail && (
-                  <div className="text-[10px] text-[var(--muted-foreground)]">
-                    {latestPipeline.detail}
-                  </div>
-                )}
-                <div className="text-[10px] text-[var(--muted-foreground)]">
-                  {formatRelativeTime(latestPipeline.timestamp)}
-                </div>
-              </div>
-            </div>
-            <Separator />
-          </>
-        )}
+        {/* Pipeline Runs */}
+        <PipelinePanel />
+
+        <Separator />
 
         {/* Activity Feed */}
         <div className="space-y-1">

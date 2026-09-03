@@ -47,6 +47,7 @@ def _update_pipeline_run(
     pipeline_run_id: int,
     *,
     status: str | None = None,
+    current_step: str | None = None,
     pr_number: int | None = None,
     pr_url: str | None = None,
     error_message: str | None = None,
@@ -67,10 +68,13 @@ def _update_pipeline_run(
 
             if status:
                 row.status = status
+            if current_step is not None:
+                row.current_step = current_step
             if status == "running" and row.started_at is None:
                 row.started_at = datetime.now(UTC)
             if status in ("success", "failed"):
                 row.completed_at = datetime.now(UTC)
+                row.current_step = None
             if pr_number is not None:
                 row.pr_number = pr_number
             if pr_url is not None:
@@ -312,6 +316,11 @@ def _run_repo_pipeline_inner(
     vendor_guidance = _vendor_guidance(settings, vendor_slug)
     client = GitHubClient(token=settings.github_token)
 
+    def _step(name: str) -> None:
+        if pipeline_run is not None:
+            _update_pipeline_run(settings, pipeline_run.id, current_step=name)
+
+    _step("downloading")
     def _get_repo_info():
         return client.get_repo_info(owner, repo)
 
@@ -328,6 +337,7 @@ def _run_repo_pipeline_inner(
             root.mkdir(parent=True)
             _extract_tarball(client.repo_tarball(owner, repo, base), root)
 
+        _step("scanning")
         impacts = scan_changes(settings, vendor_slug, root, languages=languages)
         outcome = PipelineOutcome(pr_result=None, impacts=impacts, vendor_slug=vendor_slug)
         if not impacts:
@@ -355,6 +365,7 @@ def _run_repo_pipeline_inner(
         except GitHubApiError:
             pass
 
+        _step("fixing")
         model = build_suggestion_model(settings, vendor_slug=vendor_slug)
         body = build_pr_body(
             pr_body_summary
@@ -388,6 +399,7 @@ def _run_repo_pipeline_inner(
                 outcome.record_completion()
                 return outcome
 
+        _step("pushing")
         result: PRLoopResult = run_pr_loop(
             client,
             owner,

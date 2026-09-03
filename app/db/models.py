@@ -23,6 +23,7 @@ class Vendor(Base):
     old_spec_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     poll_interval_seconds: Mapped[int] = mapped_column(Integer, default=6 * 60 * 60)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_custom: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -104,6 +105,7 @@ class PipelineRun(Base):
         Integer, ForeignKey("repositories.id"), index=True
     )
     status: Mapped[str] = mapped_column(String(16), default="queued")
+    current_step: Mapped[str | None] = mapped_column(String(32), nullable=True)
     task_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

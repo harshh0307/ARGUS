@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { useRepositories } from "@/hooks/use-repositories";
+import { api } from "@/lib/api";
+import { toast } from "sonner";
 import {
   Sheet,
   SheetContent,
@@ -9,20 +11,38 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { StaggerContainer, StaggerItem } from "@/components/ui/motion";
 import { formatRelativeTime } from "@/lib/utils";
+import { AddRepoModal } from "@/components/dashboard/add-repo-modal";
 import {
   Webhook,
   ChevronUp,
   ExternalLink,
   GitPullRequest,
+  Play,
 } from "lucide-react";
 
 export function BottomDrawer() {
-  const { repositories } = useRepositories();
+  const { repositories, refresh } = useRepositories();
   const [isOpen, setIsOpen] = useState(false);
+  const [scanning, setScanning] = useState<number | null>(null);
 
   const activeRepos = repositories.filter((r) => r.is_active);
+
+  const handleScan = async (repoId: number) => {
+    setScanning(repoId);
+    try {
+      await api.triggerPipeline(repoId, true);
+      toast.success("Pipeline triggered");
+    } catch (err) {
+      toast.error("Failed to trigger pipeline", {
+        description: err instanceof Error ? err.message : "Unknown error",
+      });
+    } finally {
+      setScanning(null);
+    }
+  };
 
   return (
     <Sheet open={isOpen} onOpenChange={setIsOpen}>
@@ -37,9 +57,12 @@ export function BottomDrawer() {
         side="bottom"
         className="bg-[var(--card)] border-[var(--border)] h-[40vh]"
       >
-        <SheetTitle className="text-sm font-semibold mb-4">
-          Monitored Repositories
-        </SheetTitle>
+        <div className="flex items-center justify-between mb-4">
+          <SheetTitle className="text-sm font-semibold">
+            Monitored Repositories
+          </SheetTitle>
+          <AddRepoModal onRepoAdded={refresh} />
+        </div>
 
         <div className="overflow-y-auto max-h-[calc(40vh-80px)]">
           {activeRepos.length === 0 ? (
@@ -49,7 +72,7 @@ export function BottomDrawer() {
                 No repositories registered yet
               </div>
               <div className="text-[10px] text-[var(--muted-foreground)]">
-                Install the Argus GitHub App or register a repository to get started
+                Click &quot;Add Repository&quot; to get started
               </div>
             </div>
           ) : (
@@ -71,15 +94,25 @@ export function BottomDrawer() {
                           ? `Last scan: ${formatRelativeTime(repo.last_run_at)}`
                           : "Never scanned"}
                       </span>
-                      <a
-                        href={`https://github.com/${repo.owner}/${repo.name}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-1 hover:text-[var(--foreground)] transition-colors"
-                      >
-                        <ExternalLink className="h-2.5 w-2.5" />
-                        GitHub
-                      </a>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleScan(repo.id)}
+                          disabled={scanning === repo.id}
+                          className="flex items-center gap-1 text-[var(--agent)] hover:text-[var(--agent)]/80 transition-colors disabled:opacity-50"
+                          title="Trigger scan"
+                        >
+                          <Play className="h-2.5 w-2.5" />
+                          {scanning === repo.id ? "..." : "Scan"}
+                        </button>
+                        <a
+                          href={`https://github.com/${repo.owner}/${repo.name}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-1 hover:text-[var(--foreground)] transition-colors"
+                        >
+                          <ExternalLink className="h-2.5 w-2.5" />
+                        </a>
+                      </div>
                     </div>
                   </div>
                 </StaggerItem>

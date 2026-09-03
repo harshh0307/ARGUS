@@ -69,6 +69,7 @@ export interface PipelineRunOut {
   id: number;
   repository_id: number;
   status: string;
+  current_step: string | null;
   task_id: string | null;
   started_at: string | null;
   completed_at: string | null;
@@ -84,4 +85,13 @@ export interface ActivityEventOut {
   title: string;
   detail: string | null;
   status: string | null;
+}
+
+export interface RepositoryCreated {
+  id: number;
+  task_id: string | null;
+}
+
+export interface VendorCreated {
+  slug: string;
 }

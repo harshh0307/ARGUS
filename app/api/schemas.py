@@ -45,6 +45,7 @@ class RepositoryIn(BaseModel):
 
 class RepositoryCreated(BaseModel):
     id: int
+    task_id: str | None = None
 
 
 class WebhookOut(BaseModel):
@@ -131,6 +132,7 @@ class PipelineRunOut(BaseModel):
     id: int
     repository_id: int
     status: str
+    current_step: str | None = None
     task_id: str | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
@@ -146,3 +148,14 @@ class ActivityEventOut(BaseModel):
     title: str
     detail: str | None = None
     status: str | None = None
+
+
+class VendorIn(BaseModel):
+    name: str
+    slug: str | None = None
+    spec_url: str | None = None
+    enabled: bool = True
+
+
+class VendorCreated(BaseModel):
+    slug: str

@@ -32,11 +32,13 @@ from app.api.schemas import (
     RepositoryOut,
     RerunIn,
     RerunOut,
+    VendorCreated,
+    VendorIn,
     VendorOut,
     WebhookOut,
 )
 from app.core.config import Settings, get_settings
-from app.db.models import DetectionRun, PipelineRun, Repository
+from app.db.models import DetectionRun, PipelineRun, Repository, Vendor
 from app.db.repository import open_session, upsert_repository
 from app.github.client import GitHubClient
 from app.registry.vendors import get_vendor, list_vendors
@@ -230,14 +232,49 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/v1/vendors", response_model=list[VendorOut])
     def vendors(settings: SettingsDep) -> list[VendorOut]:
-        return _list_vendor_rows(settings)
+        result = _list_vendor_rows(settings)
+        if settings.database_url:
+            session = _db_session(settings)
+            try:
+                custom = session.execute(
+                    select(Vendor).where(Vendor.is_custom.is_(True))
+                ).scalars().all()
+                existing_slugs = {v.slug for v in result}
+                for row in custom:
+                    if row.slug not in existing_slugs:
+                        result.append(VendorOut(
+                            slug=row.slug,
+                            name=row.name,
+                            spec_url=row.spec_url,
+                            old_spec_url=row.old_spec_url,
+                            poll_interval_seconds=row.poll_interval_seconds,
+                            enabled=row.enabled,
+                        ))
+            finally:
+                session.close()
+        return result
 
     @app.get("/api/v1/vendors/{slug}", response_model=VendorOut)
     def vendor(slug: str, settings: SettingsDep) -> VendorOut:
         try:
             spec = get_vendor(settings, slug)
-        except ValueError as exc:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+        except ValueError:
+            if settings.database_url:
+                session = _db_session(settings)
+                try:
+                    row = session.get(Vendor, slug)
+                    if row is not None:
+                        return VendorOut(
+                            slug=row.slug,
+                            name=row.name,
+                            spec_url=row.spec_url,
+                            old_spec_url=row.old_spec_url,
+                            poll_interval_seconds=row.poll_interval_seconds,
+                            enabled=row.enabled,
+                        )
+                finally:
+                    session.close()
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"vendor {slug!r} not found")
         return VendorOut(
             slug=spec.slug,
             name=spec.name,
@@ -246,6 +283,99 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             poll_interval_seconds=spec.poll_interval_seconds,
             enabled=spec.enabled,
         )
+
+    @app.post("/api/v1/vendors", response_model=VendorCreated, status_code=201)
+    def create_vendor(payload: VendorIn, settings: SettingsDep) -> VendorCreated:
+        slug = payload.slug or payload.name.lower().replace(" ", "_").replace("-", "_")
+        spec_url = payload.spec_url or f"data/specs/{slug}/current.json"
+        session = _db_session(settings)
+        try:
+            existing = session.get(Vendor, slug)
+            if existing is not None:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT, f"vendor {slug!r} already exists"
+                )
+            row = Vendor(
+                slug=slug,
+                name=payload.name,
+                spec_url=spec_url,
+                is_custom=True,
+                enabled=payload.enabled,
+            )
+            session.add(row)
+            session.commit()
+            return VendorCreated(slug=slug)
+        finally:
+            session.close()
+
+    @app.put("/api/v1/vendors/{slug}", response_model=VendorOut)
+    def update_vendor(slug: str, payload: VendorIn, settings: SettingsDep) -> VendorOut:
+        session = _db_session(settings)
+        try:
+            row = session.get(Vendor, slug)
+            if row is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, f"vendor {slug!r} not found")
+            if not row.is_custom:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST, "cannot modify built-in vendor"
+                )
+            row.name = payload.name
+            if payload.spec_url is not None:
+                row.spec_url = payload.spec_url
+            row.enabled = payload.enabled
+            session.commit()
+            return VendorOut(
+                slug=row.slug,
+                name=row.name,
+                spec_url=row.spec_url,
+                old_spec_url=row.old_spec_url,
+                poll_interval_seconds=row.poll_interval_seconds,
+                enabled=row.enabled,
+            )
+        finally:
+            session.close()
+
+    @app.delete("/api/v1/vendors/{slug}", status_code=204)
+    def delete_vendor(slug: str, settings: SettingsDep) -> None:
+        session = _db_session(settings)
+        try:
+            row = session.get(Vendor, slug)
+            if row is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, f"vendor {slug!r} not found")
+            if not row.is_custom:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST, "cannot delete built-in vendor"
+                )
+            session.delete(row)
+            session.commit()
+        finally:
+            session.close()
+
+    @app.post("/api/v1/vendors/{slug}/spec", status_code=201)
+    async def upload_spec(slug: str, request: Request, settings: SettingsDep) -> dict:
+        session = _db_session(settings)
+        try:
+            row = session.get(Vendor, slug)
+            if row is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, f"vendor {slug!r} not found")
+        finally:
+            session.close()
+        body = await request.body()
+        if not body:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "empty request body")
+        spec_dir = Path("data/specs") / slug
+        spec_dir.mkdir(parents=True, exist_ok=True)
+        spec_file = spec_dir / "current.json"
+        spec_file.write_bytes(body)
+        session = _db_session(settings)
+        try:
+            row = session.get(Vendor, slug)
+            if row is not None:
+                row.spec_url = str(spec_file)
+                session.commit()
+        finally:
+            session.close()
+        return {"slug": slug, "spec_file": str(spec_file), "size": len(body)}
 
     @app.get("/api/v1/detection-runs", response_model=list[DetectionRunOut])
     def detection_runs(
@@ -331,6 +461,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 payload.vendor_slug,
             )
             session.commit()
+            _dispatch_task(
+                "argus.scan_and_fix",
+                args=[row.id],
+                kwargs={"merge": True},
+            )
             return RepositoryCreated(id=row.id)
         finally:
             session.close()
@@ -404,6 +539,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     id=r.id,
                     repository_id=r.repository_id,
                     status=r.status,
+                    current_step=r.current_step,
                     task_id=r.task_id,
                     started_at=r.started_at,
                     completed_at=r.completed_at,
@@ -414,6 +550,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 )
                 for r in rows
             ]
+        finally:
+            session.close()
+
+    @app.get("/api/v1/pipeline-runs/{run_id}", response_model=PipelineRunOut)
+    def pipeline_run(run_id: int, settings: SettingsDep) -> PipelineRunOut:
+        session = _db_session(settings)
+        try:
+            row = session.get(PipelineRun, run_id)
+            if row is None:
+                raise HTTPException(
+                    status.HTTP_404_NOT_FOUND, f"pipeline run {run_id} not found"
+                )
+            return PipelineRunOut(
+                id=row.id,
+                repository_id=row.repository_id,
+                status=row.status,
+                current_step=row.current_step,
+                task_id=row.task_id,
+                started_at=row.started_at,
+                completed_at=row.completed_at,
+                pr_number=row.pr_number,
+                pr_url=row.pr_url,
+                error_message=row.error_message,
+                created_at=row.created_at,
+            )
         finally:
             session.close()
 
