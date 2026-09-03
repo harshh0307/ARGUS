@@ -12,10 +12,20 @@ import type {
 
 const BASE = "/api/v1";
 
+function getAuthHeaders(): Record<string, string> {
+  if (typeof window === "undefined") return {};
+  const token = localStorage.getItem("argus_token");
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders(),
+      ...init?.headers,
+    },
   });
   if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
   return res.json();
@@ -36,7 +46,10 @@ async function putJSON<T>(path: string, body: unknown): Promise<T> {
 }
 
 async function deleteJSON(path: string): Promise<void> {
-  const res = await fetch(path, { method: "DELETE" });
+  const res = await fetch(path, {
+    method: "DELETE",
+    headers: getAuthHeaders(),
+  });
   if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
 }
 
@@ -53,7 +66,10 @@ export const api = {
     const res = await fetch(`${BASE}/vendors/${slug}/spec`, {
       method: "POST",
       body: file,
-      headers: { "Content-Type": "application/octet-stream" },
+      headers: {
+        "Content-Type": "application/octet-stream",
+        ...getAuthHeaders(),
+      },
     });
     if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
     return res.json() as Promise<{ slug: string; spec_file: string; size: number }>;

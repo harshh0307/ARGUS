@@ -159,3 +159,50 @@ class VendorIn(BaseModel):
 
 class VendorCreated(BaseModel):
     slug: str
+
+
+# ── Auth schemas ────────────────────────────────────────────────────────
+
+
+class RegisterIn(BaseModel):
+    email: str
+    password: str
+    tenant_id: str | None = None
+
+
+class RegisterOut(BaseModel):
+    id: int
+    email: str
+    tenant_id: str
+
+
+class LoginIn(BaseModel):
+    email: str
+    password: str
+
+
+class TokenOut(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+
+
+class RefreshIn(BaseModel):
+    refresh_token: str
+
+
+class ApiKeyCreatedOut(BaseModel):
+    id: int
+    name: str
+    key: str
+    prefix: str
+    created_at: datetime
+
+
+class ApiKeyOut(BaseModel):
+    id: int
+    name: str
+    prefix: str
+    is_active: bool
+    created_at: datetime
+    last_used_at: datetime | None = None

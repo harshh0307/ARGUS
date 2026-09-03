@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import threading
+from datetime import timedelta
 from pathlib import Path
 from typing import Annotated
 
@@ -16,29 +17,40 @@ from sqlalchemy.orm import Session
 
 from app.api.schemas import (
     ActivityEventOut,
+    ApiKeyCreatedOut,
+    ApiKeyOut,
     ChangelogHitOut,
     DetectIn,
     DetectionRunOut,
     DetectOut,
     InstallationOut,
+    LoginIn,
     MergeIn,
     MergeOut,
     PipelineIn,
     PipelineOut,
     PipelineRunOut,
     PollOut,
+    RefreshIn,
+    RegisterIn,
+    RegisterOut,
     RepositoryCreated,
     RepositoryIn,
     RepositoryOut,
     RerunIn,
     RerunOut,
+    TokenOut,
     VendorCreated,
     VendorIn,
     VendorOut,
     WebhookOut,
 )
+from app.auth.api_keys import generate_api_key
+from app.auth.deps import AdminUser, CurrentUser
+from app.auth.jwt import create_access_token, create_refresh_token, decode_token
+from app.auth.password import hash_password, verify_password
 from app.core.config import Settings, get_settings
-from app.db.models import DetectionRun, PipelineRun, Repository, Vendor
+from app.db.models import ApiKey, DetectionRun, PipelineRun, Repository, User, Vendor
 from app.db.repository import open_session, upsert_repository
 from app.github.client import GitHubClient
 from app.registry.vendors import get_vendor, list_vendors
@@ -46,6 +58,14 @@ from app.workers.celery_app import app as celery_app
 
 _templates_dir = Path(__file__).parent / "templates"
 _templates = Jinja2Templates(directory=str(_templates_dir))
+
+
+def _rate_limit_handler(request: Request, exc) -> HTMLResponse:
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=429,
+        content={"error": "rate limit exceeded", "detail": str(exc)},
+    )
 
 
 def _db_session(settings: Settings) -> Session:
@@ -206,8 +226,20 @@ _WEBHOOK_HANDLERS = {
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
+    from slowapi import Limiter
+    from slowapi.errors import RateLimitExceeded
+    from slowapi.util import get_remote_address
+
     app = FastAPI(title="Argus API", version="0.1.0")
     app.state.settings = settings or get_settings()
+
+    limiter = Limiter(
+        key_func=get_remote_address,
+        default_limits=[app.state.settings.rate_limit_default],
+        storage_uri="memory://",
+    )
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
 
     app.add_middleware(
         CORSMiddleware,
@@ -230,15 +262,176 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         from app.metrics import metrics
         return metrics.export()
 
+    # ── Auth endpoints ────────────────────────────────────────────────
+
+    @app.post("/api/v1/auth/register", response_model=RegisterOut, status_code=201)
+    @limiter.limit(app.state.settings.rate_limit_auth)
+    def auth_register(request: Request, payload: RegisterIn, settings: SettingsDep) -> RegisterOut:
+        session = _db_session(settings)
+        try:
+            existing = session.execute(
+                select(User).where(User.email == payload.email)
+            ).scalar_one_or_none()
+            if existing:
+                raise HTTPException(status.HTTP_409_CONFLICT, "email already registered")
+
+            tenant_id = payload.tenant_id or payload.email.split("@")[0]
+            user = User(
+                email=payload.email,
+                hashed_password=hash_password(payload.password),
+                tenant_id=tenant_id,
+            )
+            session.add(user)
+            session.commit()
+            session.refresh(user)
+            return RegisterOut(id=user.id, email=user.email, tenant_id=user.tenant_id)
+        finally:
+            session.close()
+
+    @app.post("/api/v1/auth/login", response_model=TokenOut)
+    @limiter.limit(app.state.settings.rate_limit_auth)
+    def auth_login(request: Request, payload: LoginIn, settings: SettingsDep) -> TokenOut:
+        session = _db_session(settings)
+        try:
+            user = session.execute(
+                select(User).where(User.email == payload.email)
+            ).scalar_one_or_none()
+            if not user or not verify_password(payload.password, user.hashed_password):
+                raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
+            if not user.is_active:
+                raise HTTPException(status.HTTP_403_FORBIDDEN, "account disabled")
+
+            access = create_access_token(
+                {"sub": str(user.id)},
+                settings.auth_secret_key,
+                timedelta(minutes=settings.access_token_expire_minutes),
+                settings.auth_algorithm,
+            )
+            refresh = create_refresh_token(
+                {"sub": str(user.id)},
+                settings.auth_secret_key,
+                timedelta(days=settings.refresh_token_expire_days),
+                settings.auth_algorithm,
+            )
+            return TokenOut(access_token=access, refresh_token=refresh)
+        finally:
+            session.close()
+
+    @app.post("/api/v1/auth/refresh", response_model=TokenOut)
+    def auth_refresh(payload: RefreshIn, settings: SettingsDep) -> TokenOut:
+        payload_data = decode_token(
+            payload.refresh_token, settings.auth_secret_key, settings.auth_algorithm
+        )
+        if not payload_data or payload_data.get("type") != "refresh":
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid refresh token")
+
+        user_id = payload_data.get("sub")
+        session = _db_session(settings)
+        try:
+            user = session.get(User, int(user_id))
+            if not user or not user.is_active:
+                raise HTTPException(status.HTTP_401_UNAUTHORIZED, "user not found or disabled")
+
+            access = create_access_token(
+                {"sub": str(user.id)},
+                settings.auth_secret_key,
+                timedelta(minutes=settings.access_token_expire_minutes),
+                settings.auth_algorithm,
+            )
+            refresh = create_refresh_token(
+                {"sub": str(user.id)},
+                settings.auth_secret_key,
+                timedelta(days=settings.refresh_token_expire_days),
+                settings.auth_algorithm,
+            )
+            return TokenOut(access_token=access, refresh_token=refresh)
+        finally:
+            session.close()
+
+    @app.get("/api/v1/auth/me")
+    def auth_me(current_user: CurrentUser) -> dict:
+        return {
+            "id": current_user.id,
+            "email": current_user.email,
+            "tenant_id": current_user.tenant_id,
+            "is_admin": current_user.is_admin,
+        }
+
+    # ── API Key management ───────────────────────────────────────────
+
+    @app.post("/api/v1/auth/api-keys", response_model=ApiKeyCreatedOut, status_code=201)
+    def create_api_key(
+        name: str, settings: SettingsDep, current_user: CurrentUser
+    ) -> ApiKeyCreatedOut:
+        raw_key, key_hash, prefix = generate_api_key()
+        session = _db_session(settings)
+        try:
+            api_key = ApiKey(
+                user_id=current_user.id,
+                key_hash=key_hash,
+                name=name,
+                prefix=prefix,
+            )
+            session.add(api_key)
+            session.commit()
+            session.refresh(api_key)
+            return ApiKeyCreatedOut(
+                id=api_key.id,
+                name=api_key.name,
+                key=raw_key,
+                prefix=prefix,
+                created_at=api_key.created_at,
+            )
+        finally:
+            session.close()
+
+    @app.get("/api/v1/auth/api-keys", response_model=list[ApiKeyOut])
+    def list_api_keys(settings: SettingsDep, current_user: CurrentUser) -> list[ApiKeyOut]:
+        session = _db_session(settings)
+        try:
+            rows = session.execute(
+                select(ApiKey).where(ApiKey.user_id == current_user.id)
+            ).scalars().all()
+            return [
+                ApiKeyOut(
+                    id=r.id,
+                    name=r.name,
+                    prefix=r.prefix,
+                    is_active=r.is_active,
+                    created_at=r.created_at,
+                    last_used_at=r.last_used_at,
+                )
+                for r in rows
+            ]
+        finally:
+            session.close()
+
+    @app.delete("/api/v1/auth/api-keys/{key_id}", status_code=204)
+    def revoke_api_key(
+        key_id: int, settings: SettingsDep, current_user: CurrentUser
+    ) -> None:
+        session = _db_session(settings)
+        try:
+            row = session.get(ApiKey, key_id)
+            if row is None or row.user_id != current_user.id:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "API key not found")
+            row.is_active = False
+            session.commit()
+        finally:
+            session.close()
+
     @app.get("/api/v1/vendors", response_model=list[VendorOut])
-    def vendors(settings: SettingsDep) -> list[VendorOut]:
+    def vendors(settings: SettingsDep, current_user: CurrentUser) -> list[VendorOut]:
         result = _list_vendor_rows(settings)
         if settings.database_url:
             session = _db_session(settings)
             try:
-                custom = session.execute(
-                    select(Vendor).where(Vendor.is_custom.is_(True))
-                ).scalars().all()
+                stmt = select(Vendor).where(Vendor.is_custom.is_(True))
+                if not current_user.is_admin:
+                    stmt = stmt.where(
+                        (Vendor.tenant_id == current_user.tenant_id) | (Vendor.tenant_id.is_(None))
+                    )
+                custom = session.execute(stmt).scalars().all()
                 existing_slugs = {v.slug for v in result}
                 for row in custom:
                     if row.slug not in existing_slugs:
@@ -255,7 +448,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return result
 
     @app.get("/api/v1/vendors/{slug}", response_model=VendorOut)
-    def vendor(slug: str, settings: SettingsDep) -> VendorOut:
+    def vendor(slug: str, settings: SettingsDep, current_user: CurrentUser) -> VendorOut:
         try:
             spec = get_vendor(settings, slug)
         except ValueError:
@@ -264,6 +457,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 try:
                     row = session.get(Vendor, slug)
                     if row is not None:
+                        if not current_user.is_admin and row.tenant_id is not None and row.tenant_id != current_user.tenant_id:
+                            raise HTTPException(status.HTTP_404_NOT_FOUND, f"vendor {slug!r} not found")
                         return VendorOut(
                             slug=row.slug,
                             name=row.name,
@@ -285,7 +480,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     @app.post("/api/v1/vendors", response_model=VendorCreated, status_code=201)
-    def create_vendor(payload: VendorIn, settings: SettingsDep) -> VendorCreated:
+    def create_vendor(payload: VendorIn, settings: SettingsDep, current_user: CurrentUser) -> VendorCreated:
         slug = payload.slug or payload.name.lower().replace(" ", "_").replace("-", "_")
         spec_url = payload.spec_url or f"data/specs/{slug}/current.json"
         session = _db_session(settings)
@@ -301,6 +496,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 spec_url=spec_url,
                 is_custom=True,
                 enabled=payload.enabled,
+                tenant_id=current_user.tenant_id,
             )
             session.add(row)
             session.commit()
@@ -309,7 +505,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             session.close()
 
     @app.put("/api/v1/vendors/{slug}", response_model=VendorOut)
-    def update_vendor(slug: str, payload: VendorIn, settings: SettingsDep) -> VendorOut:
+    def update_vendor(slug: str, payload: VendorIn, settings: SettingsDep, current_user: CurrentUser) -> VendorOut:
         session = _db_session(settings)
         try:
             row = session.get(Vendor, slug)
@@ -319,6 +515,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise HTTPException(
                     status.HTTP_400_BAD_REQUEST, "cannot modify built-in vendor"
                 )
+            if not current_user.is_admin and row.tenant_id is not None and row.tenant_id != current_user.tenant_id:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, f"vendor {slug!r} not found")
             row.name = payload.name
             if payload.spec_url is not None:
                 row.spec_url = payload.spec_url
@@ -336,7 +534,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             session.close()
 
     @app.delete("/api/v1/vendors/{slug}", status_code=204)
-    def delete_vendor(slug: str, settings: SettingsDep) -> None:
+    def delete_vendor(slug: str, settings: SettingsDep, current_user: CurrentUser) -> None:
         session = _db_session(settings)
         try:
             row = session.get(Vendor, slug)
@@ -346,17 +544,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise HTTPException(
                     status.HTTP_400_BAD_REQUEST, "cannot delete built-in vendor"
                 )
+            if not current_user.is_admin and row.tenant_id is not None and row.tenant_id != current_user.tenant_id:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, f"vendor {slug!r} not found")
             session.delete(row)
             session.commit()
         finally:
             session.close()
 
     @app.post("/api/v1/vendors/{slug}/spec", status_code=201)
-    async def upload_spec(slug: str, request: Request, settings: SettingsDep) -> dict:
+    async def upload_spec(slug: str, request: Request, settings: SettingsDep, current_user: CurrentUser) -> dict:
         session = _db_session(settings)
         try:
             row = session.get(Vendor, slug)
             if row is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, f"vendor {slug!r} not found")
+            if not current_user.is_admin and row.tenant_id is not None and row.tenant_id != current_user.tenant_id:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, f"vendor {slug!r} not found")
         finally:
             session.close()
@@ -379,13 +581,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/v1/detection-runs", response_model=list[DetectionRunOut])
     def detection_runs(
-        settings: SettingsDep, limit: int = Query(default=50, ge=1, le=500)
+        settings: SettingsDep, current_user: CurrentUser, limit: int = Query(default=50, ge=1, le=500)
     ) -> list[DetectionRunOut]:
         session = _db_session(settings)
         try:
-            rows = session.execute(
-                select(DetectionRun).order_by(DetectionRun.id.desc()).limit(limit)
-            ).scalars().all()
+            stmt = select(DetectionRun).order_by(DetectionRun.id.desc()).limit(limit)
+            if not current_user.is_admin:
+                stmt = stmt.where(
+                    (DetectionRun.tenant_id == current_user.tenant_id)
+                    | (DetectionRun.tenant_id.is_(None))
+                )
+            rows = session.execute(stmt).scalars().all()
             return [
                 DetectionRunOut(
                     id=r.id,
@@ -403,7 +609,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             session.close()
 
     @app.get("/api/v1/detection-runs/{run_id}", response_model=DetectionRunOut)
-    def detection_run(run_id: int, settings: SettingsDep) -> DetectionRunOut:
+    def detection_run(run_id: int, settings: SettingsDep, current_user: CurrentUser) -> DetectionRunOut:
         session = _db_session(settings)
         try:
             row = session.get(DetectionRun, run_id)
@@ -411,6 +617,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise HTTPException(
                     status.HTTP_404_NOT_FOUND, f"detection run {run_id} not found"
                 )
+            if not current_user.is_admin and row.tenant_id is not None and row.tenant_id != current_user.tenant_id:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, f"detection run {run_id} not found")
             return DetectionRunOut(
                 id=row.id,
                 vendor_slug=row.vendor_slug,
@@ -425,12 +633,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             session.close()
 
     @app.get("/api/v1/repositories", response_model=list[RepositoryOut])
-    def repositories(settings: SettingsDep) -> list[RepositoryOut]:
+    def repositories(settings: SettingsDep, current_user: CurrentUser) -> list[RepositoryOut]:
         session = _db_session(settings)
         try:
-            rows = session.execute(
-                select(Repository).order_by(Repository.id)
-            ).scalars().all()
+            if not current_user.is_admin:
+                rows = session.execute(
+                    select(Repository).where(Repository.tenant_id == current_user.tenant_id)
+                ).scalars().all()
+            else:
+                rows = session.execute(
+                    select(Repository).order_by(Repository.id)
+                ).scalars().all()
             return [
                 RepositoryOut(
                     id=r.id,
@@ -449,7 +662,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/v1/repositories", response_model=RepositoryCreated, status_code=201)
     def register_repository(
-        payload: RepositoryIn, settings: SettingsDep
+        payload: RepositoryIn, settings: SettingsDep, current_user: CurrentUser
     ) -> RepositoryCreated:
         session = _db_session(settings)
         try:
@@ -460,6 +673,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 payload.default_branch,
                 payload.vendor_slug,
             )
+            row.tenant_id = current_user.tenant_id
             session.commit()
             _dispatch_task(
                 "argus.scan_and_fix",
@@ -471,12 +685,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             session.close()
 
     @app.get("/api/v1/installations", response_model=list[InstallationOut])
-    def installations(settings: SettingsDep) -> list[InstallationOut]:
+    def installations(settings: SettingsDep, current_user: CurrentUser) -> list[InstallationOut]:
         from app.db.repository import list_installations
 
         session = _db_session(settings)
         try:
-            rows = list_installations(session)
+            tenant_id = None if current_user.is_admin else current_user.tenant_id
+            rows = list_installations(session, tenant_id=tenant_id)
             return [
                 InstallationOut(
                     id=r.id,
@@ -493,6 +708,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/v1/search/changelog", response_model=list[ChangelogHitOut])
     def search_changelog(
         settings: SettingsDep,
+        current_user: CurrentUser,
         q: str = Query("", description="search terms"),
         vendor: str | None = Query(None),
         limit: int = Query(10, ge=1, le=100),
@@ -502,12 +718,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         session = _db_session(settings)
         try:
+            tenant_id = None if current_user.is_admin else current_user.tenant_id
             hits = search_rows(
                 session,
                 q,
                 vendor_slug=vendor,
                 limit=limit,
                 embedder=build_embedder(settings),
+                tenant_id=tenant_id,
             )
             return [
                 ChangelogHitOut(
@@ -527,13 +745,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/v1/pipeline-runs", response_model=list[PipelineRunOut])
     def pipeline_runs(
-        settings: SettingsDep, limit: int = Query(default=20, ge=1, le=100)
+        settings: SettingsDep, current_user: CurrentUser, limit: int = Query(default=20, ge=1, le=100)
     ) -> list[PipelineRunOut]:
         session = _db_session(settings)
         try:
-            rows = session.execute(
-                select(PipelineRun).order_by(PipelineRun.id.desc()).limit(limit)
-            ).scalars().all()
+            stmt = (
+                select(PipelineRun)
+                .join(Repository, PipelineRun.repository_id == Repository.id)
+                .order_by(PipelineRun.id.desc())
+                .limit(limit)
+            )
+            if not current_user.is_admin:
+                stmt = stmt.where(
+                    (Repository.tenant_id == current_user.tenant_id)
+                    | (Repository.tenant_id.is_(None))
+                )
+            rows = session.execute(stmt).scalars().all()
             return [
                 PipelineRunOut(
                     id=r.id,
@@ -554,7 +781,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             session.close()
 
     @app.get("/api/v1/pipeline-runs/{run_id}", response_model=PipelineRunOut)
-    def pipeline_run(run_id: int, settings: SettingsDep) -> PipelineRunOut:
+    def pipeline_run(run_id: int, settings: SettingsDep, current_user: CurrentUser) -> PipelineRunOut:
         session = _db_session(settings)
         try:
             row = session.get(PipelineRun, run_id)
@@ -562,6 +789,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise HTTPException(
                     status.HTTP_404_NOT_FOUND, f"pipeline run {run_id} not found"
                 )
+            if not current_user.is_admin:
+                repo = session.get(Repository, row.repository_id)
+                if repo is None or (repo.tenant_id is not None and repo.tenant_id != current_user.tenant_id):
+                    raise HTTPException(status.HTTP_404_NOT_FOUND, f"pipeline run {run_id} not found")
             return PipelineRunOut(
                 id=row.id,
                 repository_id=row.repository_id,
@@ -580,15 +811,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/v1/activity", response_model=list[ActivityEventOut])
     def activity(
-        settings: SettingsDep, limit: int = Query(default=30, ge=1, le=100)
+        settings: SettingsDep, current_user: CurrentUser, limit: int = Query(default=30, ge=1, le=100)
     ) -> list[ActivityEventOut]:
         """Combined timeline of detection runs and pipeline runs."""
         session = _db_session(settings)
         try:
             events: list[ActivityEventOut] = []
-            detections = session.execute(
-                select(DetectionRun).order_by(DetectionRun.id.desc()).limit(limit)
-            ).scalars().all()
+            det_stmt = select(DetectionRun).order_by(DetectionRun.id.desc()).limit(limit)
+            if not current_user.is_admin:
+                det_stmt = det_stmt.where(
+                    (DetectionRun.tenant_id == current_user.tenant_id)
+                    | (DetectionRun.tenant_id.is_(None))
+                )
+            detections = session.execute(det_stmt).scalars().all()
             for r in detections:
                 total = r.breaking_count + r.additive_count
                 title = f"Detected {r.breaking_count} breaking, {r.additive_count} additive changes in {r.vendor_slug}"
@@ -599,9 +834,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     detail=f"Run #{r.id} — {total} total changes",
                     status="breaking" if r.breaking_count > 0 else "additive",
                 ))
-            pipelines = session.execute(
-                select(PipelineRun).order_by(PipelineRun.id.desc()).limit(limit)
-            ).scalars().all()
+            pipe_stmt = (
+                select(PipelineRun)
+                .join(Repository, PipelineRun.repository_id == Repository.id)
+                .order_by(PipelineRun.id.desc())
+                .limit(limit)
+            )
+            if not current_user.is_admin:
+                pipe_stmt = pipe_stmt.where(
+                    (Repository.tenant_id == current_user.tenant_id)
+                    | (Repository.tenant_id.is_(None))
+                )
+            pipelines = session.execute(pipe_stmt).scalars().all()
             for r in pipelines:
                 repo = session.get(Repository, r.repository_id)
                 repo_name = f"{repo.owner}/{repo.name}" if repo else f"repo #{r.repository_id}"
@@ -624,6 +868,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             session.close()
 
     @app.post("/api/v1/webhook", response_model=WebhookOut)
+    @limiter.limit(app.state.settings.rate_limit_webhook)
     async def webhook(request: Request, settings: SettingsDep) -> WebhookOut:
         if not settings.webhook_secret:
             raise HTTPException(
@@ -663,19 +908,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return True, None
 
     @app.post("/api/v1/poll", response_model=PollOut)
-    def trigger_poll(settings: SettingsDep) -> PollOut:
+    def trigger_poll(settings: SettingsDep, current_user: AdminUser) -> PollOut:
         dispatched, task_id = _dispatch_task("argus.poll_all_vendors")
         return PollOut(dispatched=dispatched, task_id=task_id)
 
     @app.post("/api/v1/detect", response_model=DetectOut)
-    def trigger_detect(payload: DetectIn, settings: SettingsDep) -> DetectOut:
+    def trigger_detect(payload: DetectIn, settings: SettingsDep, current_user: AdminUser) -> DetectOut:
         dispatched, task_id = _dispatch_task(
             "argus.run_detection", args=[payload.vendor_slug]
         )
         return DetectOut(dispatched=dispatched, vendor_slug=payload.vendor_slug, task_id=task_id)
 
     @app.post("/api/v1/pipeline", response_model=PipelineOut)
-    def trigger_pipeline(payload: PipelineIn, settings: SettingsDep) -> PipelineOut:
+    def trigger_pipeline(payload: PipelineIn, settings: SettingsDep, current_user: CurrentUser) -> PipelineOut:
+        session = _db_session(settings)
+        try:
+            repo = session.get(Repository, payload.repository_id)
+            if repo is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, f"repository {payload.repository_id} not found")
+            if not current_user.is_admin and repo.tenant_id is not None and repo.tenant_id != current_user.tenant_id:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, f"repository {payload.repository_id} not found")
+        finally:
+            session.close()
         dispatched, task_id = _dispatch_task(
             "argus.scan_and_fix",
             args=[payload.repository_id],
@@ -686,7 +940,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     @app.post("/api/v1/fix/rerun", response_model=RerunOut)
-    def trigger_rerun(payload: RerunIn, settings: SettingsDep) -> RerunOut:
+    def trigger_rerun(payload: RerunIn, settings: SettingsDep, current_user: CurrentUser) -> RerunOut:
+        session = _db_session(settings)
+        try:
+            repo = session.get(Repository, payload.repository_id)
+            if repo is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, f"repository {payload.repository_id} not found")
+            if not current_user.is_admin and repo.tenant_id is not None and repo.tenant_id != current_user.tenant_id:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, f"repository {payload.repository_id} not found")
+        finally:
+            session.close()
         dispatched, task_id = _dispatch_task(
             "argus.scan_and_fix",
             args=[payload.repository_id],
@@ -697,7 +960,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     @app.post("/api/v1/pr/merge", response_model=MergeOut)
-    def trigger_merge(payload: MergeIn, settings: SettingsDep) -> MergeOut:
+    def trigger_merge(payload: MergeIn, settings: SettingsDep, current_user: CurrentUser) -> MergeOut:
+        session = _db_session(settings)
+        try:
+            repo = session.execute(
+                select(Repository).where(
+                    Repository.owner == payload.owner, Repository.name == payload.repo
+                )
+            ).scalar_one_or_none()
+            if repo is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, f"repository {payload.owner}/{payload.repo} not found")
+            if not current_user.is_admin and repo.tenant_id is not None and repo.tenant_id != current_user.tenant_id:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, f"repository {payload.owner}/{payload.repo} not found")
+        finally:
+            session.close()
+
         def _do_merge():
             client = GitHubClient(token=settings.github_token)
             client.merge_pull_request(payload.owner, payload.repo, payload.pr_number)

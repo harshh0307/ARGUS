@@ -95,3 +95,33 @@ export interface RepositoryCreated {
 export interface VendorCreated {
   slug: string;
 }
+
+export interface UserOut {
+  id: number;
+  email: string;
+  tenant_id: string;
+  is_admin: boolean;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface TokenOut {
+  access_token: string;
+  refresh_token: string;
+  token_type: string;
+}
+
+export interface ApiKeyOut {
+  id: number;
+  name: string;
+  key_prefix: string;
+  created_at: string;
+  last_used_at: string | null;
+}
+
+export interface ApiKeyCreatedOut {
+  id: number;
+  name: string;
+  key: string;
+  key_prefix: string;
+}

@@ -2,9 +2,10 @@
 
 import { useHealth } from "@/hooks/use-health";
 import { useVendors } from "@/hooks/use-vendors";
+import { useAuth } from "@/providers/auth-provider";
 import { useTheme } from "next-themes";
 import { motion } from "@/components/ui/motion";
-import { Sun, Moon, Activity, Zap, LayoutDashboard, Store } from "lucide-react";
+import { Sun, Moon, Activity, Zap, LayoutDashboard, Store, LogOut, User } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -22,6 +23,7 @@ export function Header({ activeTab = "dashboard", onTabChange }: HeaderProps) {
   const { data: health } = useHealth();
   const { vendors, selectedVendor, setSelectedVendor } = useVendors();
   const { theme, setTheme } = useTheme();
+  const { user, logout } = useAuth();
 
   const isHealthy = health?.status === "ok";
   const dbOk = health?.database ?? false;
@@ -93,12 +95,28 @@ export function Header({ activeTab = "dashboard", onTabChange }: HeaderProps) {
         </div>
       )}
 
-      {/* Right: Provider Pill + Theme Toggle */}
+      {/* Right: User Info + Theme Toggle */}
       <div className="flex items-center gap-3 ml-auto">
-        <div className="hidden md:flex items-center gap-1.5 px-3 py-1 rounded-full bg-[var(--surface)] border border-[var(--border)] text-[10px] text-[var(--muted-foreground)]">
-          <Activity className="h-3 w-3 text-[var(--passed)]" />
-          <span>Primary: OpenAI / Gemini | Fallback: OpenRouter Nemotron-3 (Ready)</span>
-        </div>
+        {user && (
+          <div className="flex items-center gap-2">
+            <div className="hidden md:flex items-center gap-1.5 px-3 py-1 rounded-full bg-[var(--surface)] border border-[var(--border)] text-[10px] text-[var(--muted-foreground)]">
+              <User className="h-3 w-3" />
+              <span>{user.email}</span>
+              {user.is_admin && (
+                <span className="ml-1 rounded bg-[var(--agent)]/20 px-1 py-0.5 text-[var(--agent)]">
+                  admin
+                </span>
+              )}
+            </div>
+            <button
+              onClick={logout}
+              className="p-2 rounded-md hover:bg-[var(--surface-hover)] transition-colors"
+              title="Sign out"
+            >
+              <LogOut className="h-4 w-4 text-[var(--muted-foreground)]" />
+            </button>
+          </div>
+        )}
         <motion.button
           whileTap={{ rotate: 180, scale: 0.9 }}
           transition={{ duration: 0.3 }}

@@ -54,6 +54,15 @@ class Settings(BaseSettings):
     fix_max_tokens_per_run: int = 500000
     fix_token_budget_max: int = 120000
     fix_max_patch_history: int = 10
+    # Auth settings
+    auth_secret_key: str = "change-me-in-production"
+    auth_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 30
+    refresh_token_expire_days: int = 7
+    # Rate limit settings
+    rate_limit_default: str = "60/minute"
+    rate_limit_auth: str = "10/minute"
+    rate_limit_webhook: str = "30/minute"
 
 
 @lru_cache
