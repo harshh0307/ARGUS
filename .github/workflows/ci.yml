@@ -19,11 +19,13 @@ jobs:
         run: pip install -e ".[dev]"
 
       - name: Ruff
-        run: ruff check app tests
+        run: ruff check app tests migrations
 
       - name: Pytest
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # A few tests exercise credential *resolution* and fail if nothing is
+          # configured at all. No real access is needed.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN || 'dummy-token-for-tests' }}
         run: pytest -q
 
   terraform:
