@@ -9,6 +9,8 @@ from sqlalchemy.orm import sessionmaker
 from app.core.config import Settings
 from app.db.models import Base
 
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
 
 @lru_cache(maxsize=4)
 def get_engine(url: str) -> Engine:
@@ -22,8 +24,35 @@ def get_engine(url: str) -> Engine:
 
 
 def init_db(engine: Engine | None = None) -> None:
+    """Create tables directly from the models.
+
+    Used by the CLI, tests, and SQLite, where running the migration chain buys
+    nothing — the Alembic baseline is generated from these same models and is
+    verified to produce an empty autogenerate diff. Deployed Postgres goes
+    through :func:`run_migrations` instead.
+    """
     engine = engine or get_engine(_database_url())
     _create_all_locked(engine)
+
+
+def run_migrations(url: str | None = None) -> None:
+    """Bring the database up to the latest revision (``alembic upgrade head``).
+
+    This is the deployed path. It is intended to run once at startup, not per
+    request, and exactly one process should run it.
+    """
+    from alembic import command
+    from alembic.config import Config
+
+    url = url or _database_url()
+    config = Config(str(_PROJECT_ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(_PROJECT_ROOT / "migrations"))
+    # env.py resolves the URL itself, but pass it through so an explicit
+    # argument wins over the ambient environment.
+    config.cmd_opts = None
+    config.attributes["configure_logger"] = False
+    config.set_main_option("sqlalchemy.url", url.replace("%", "%%"))
+    command.upgrade(config, "head")
 
 
 def _create_all_locked(engine: Engine) -> None:

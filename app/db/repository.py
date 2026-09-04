@@ -20,16 +20,22 @@ from app.search.embeddings import build_embedder, cosine_similarity, embed_text
 
 DEFAULT_ENGINE = None
 
+# URLs whose schema has already been initialised in this process. Without this,
+# open_session ran init_db -> create_all on *every* call, adding a metadata
+# round-trip to every API request.
+_SCHEMA_READY: set[str] = set()
+
 
 def open_session(settings: Settings) -> Session:
     if DEFAULT_ENGINE is None:
-        engine = None
         if not settings.database_url:
             raise RuntimeError("DATABASE_URL is not set; configure it in .env")
         from app.db.engine import get_engine
 
         engine = get_engine(settings.database_url)
-        init_db(engine)
+        if settings.database_url not in _SCHEMA_READY:
+            init_db(engine)
+            _SCHEMA_READY.add(settings.database_url)
         return session_factory(engine)()
     return session_factory(DEFAULT_ENGINE)()
 

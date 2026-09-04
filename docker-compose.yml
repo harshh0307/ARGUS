@@ -2,7 +2,11 @@
   argus:
     build: .
     image: argus:local
-    env_file: .env
+    env_file:
+      # Optional so the suite and one-shot commands run on a fresh clone,
+      # before anyone has copied .env.example to .env.
+      - path: .env
+        required: false
     volumes:
       - ./repos:/repos:ro
     command: ["scan", "/repos"]
@@ -35,17 +39,39 @@
       timeout: 5s
       retries: 5
 
+  # Exactly one process runs migrations; every other service waits for it to
+  # finish rather than racing to create the schema itself.
+  migrate:
+    build: .
+    image: argus:local
+    entrypoint: ["alembic"]
+    command: ["upgrade", "head"]
+    env_file:
+      # Optional so the suite and one-shot commands run on a fresh clone,
+      # before anyone has copied .env.example to .env.
+      - path: .env
+        required: false
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   worker:
     restart: unless-stopped
     build: .
     image: argus:local
     entrypoint: ["celery", "-A", "app.workers.celery_app"]
-    env_file: .env
+    env_file:
+      # Optional so the suite and one-shot commands run on a fresh clone,
+      # before anyone has copied .env.example to .env.
+      - path: .env
+        required: false
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     command: ["worker", "--loglevel=info"]
 
   beat:
@@ -54,12 +80,18 @@
     image: argus:local
     entrypoint: ["celery", "-A", "app.workers.celery_app"]
     working_dir: /tmp
-    env_file: .env
+    env_file:
+      # Optional so the suite and one-shot commands run on a fresh clone,
+      # before anyone has copied .env.example to .env.
+      - path: .env
+        required: false
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     command: ["beat", "--loglevel=info"]
 
   api:
@@ -67,12 +99,18 @@
     build: .
     image: argus:local
     entrypoint: ["uvicorn", "app.api.main:app"]
-    env_file: .env
+    env_file:
+      # Optional so the suite and one-shot commands run on a fresh clone,
+      # before anyone has copied .env.example to .env.
+      - path: .env
+        required: false
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     ports:
       - "8000:8000"
     command: ["--host", "0.0.0.0", "--port", "8000"]
@@ -81,7 +119,11 @@
     build: .
     image: argus:local
     entrypoint: ["uvicorn", "app.api.main:app"]
-    env_file: .env
+    env_file:
+      # Optional so the suite and one-shot commands run on a fresh clone,
+      # before anyone has copied .env.example to .env.
+      - path: .env
+        required: false
     depends_on:
       postgres:
         condition: service_healthy
@@ -94,14 +136,28 @@
     command: ["--host", "0.0.0.0", "--port", "8000", "--reload"]
 
   test:
-    build: .
-    image: argus:local
-    env_file: .env
+    build:
+      context: .
+      target: dev
+    image: argus:dev
+    # The image ENTRYPOINT is ["argus"], so without this the command below
+    # becomes `argus python -m pytest ...` and argparse rejects it.
+    entrypoint: []
+    env_file:
+      # Optional so the suite and one-shot commands run on a fresh clone,
+      # before anyone has copied .env.example to .env.
+      - path: .env
+        required: false
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    environment:
+      # The suite must not depend on real credentials. A few tests exercise
+      # credential *resolution* and fail if nothing is configured at all, so
+      # supply a placeholder unless the caller overrides it.
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-dummy-token-for-tests}
     command: ["python", "-m", "pytest", "tests", "-q", "--tb=short"]
     volumes:
       - ./tests:/app/tests

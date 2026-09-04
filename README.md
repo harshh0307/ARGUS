@@ -321,7 +321,9 @@ docker compose up api-dev     # same as api, with --reload and ./app bind-mounte
 docker compose run --rm test  # run the pytest suite inside the image
 ```
 
-Compose services: `argus` (one-shot scan), `postgres` (pgvector/pg16), `redis`, `worker`, `beat`, `api`, `api-dev`, `test`, `dashboard`. Postgres and Redis have healthchecks and every dependent service waits on `service_healthy`.
+Compose services: `argus` (one-shot scan), `postgres` (pgvector/pg16), `redis`, `migrate`, `worker`, `beat`, `api`, `api-dev`, `test` (dev stage), `dashboard`. Postgres and Redis have healthchecks; dependents wait on `service_healthy`, and on `migrate` completing successfully so exactly one process applies migrations.
+
+`env_file` is marked `required: false`, so a fresh clone can run `docker compose run --rm test` before anyone has copied `.env.example` to `.env`.
 
 ## Web dashboard (Next.js)
 
@@ -332,6 +334,38 @@ npm run dev        # http://localhost:3000, expects the API on NEXT_PUBLIC_API_U
 ```
 
 Register at `/register`, sign in at `/login`, then the workspace gives you a three-pane view: repositories and vendors on the left, pipeline runs and activity in the middle, analytics and changelog search on the right. Repos and custom vendors can be added from the UI, and adding a repo auto-triggers a pipeline run. State refreshes through polling hooks (`use-repositories`, `use-pipeline-runs`, `use-detection-runs`, `use-activity`, `use-vendors`, `use-health`).
+
+## Database migrations
+
+Alembic owns the schema. `migrations/env.py` reads `DATABASE_URL` from `Settings`, so there is no URL in `alembic.ini` to keep in sync.
+
+```powershell
+docker compose up migrate                     # apply everything (compose does this automatically)
+
+# or directly, against any database:
+alembic upgrade head
+alembic current
+alembic downgrade -1
+alembic revision --autogenerate -m "what changed"
+```
+
+Revisions:
+
+| Revision | What it does |
+|---|---|
+| `cd7a0398601e` | baseline — the schema as it stood before Alembic (9 tables) |
+| `a9bec9bb0b7d` | `spec_snapshots.content` + `spec_format`, unique `(vendor_slug, digest)`, new `spec_pointers` table |
+
+**Upgrading a database that predates Alembic.** It has no `alembic_version` table, so stamp the baseline first — otherwise Alembic tries to create tables that already exist:
+
+```powershell
+alembic stamp cd7a0398601e
+alembic upgrade head
+```
+
+The second revision is written to be safe against existing data: it adds `spec_format` nullable, backfills `'json'`, then enforces `NOT NULL`, and collapses any duplicate `(vendor_slug, digest)` rows to their earliest row before adding the unique constraint. Both paths are covered in the verification steps below.
+
+When adding a model column, generate the revision and **read it before committing** — autogenerate emits `nullable=False` with no server default, which fails on any table that already has rows.
 
 ## Test & lint
 
@@ -345,8 +379,13 @@ Register at `/register`, sign in at `/login`, then the workspace gives you a thr
 The package declares `requires-python = ">=3.14"`, so `pip install -e ".[dev]"` **fails outright on 3.13 or older** — the error names the interpreter, not the constraint, which is easy to misread. If you don't have 3.14 locally, run the suite in the image instead:
 
 ```powershell
-docker compose run --rm test
+docker compose run --rm test                  # pytest
+docker compose run --rm test ruff check --no-cache app tests migrations
 ```
+
+The `test` service builds the `dev` stage of the Dockerfile, which is the only image with `pytest` and `ruff` — the runtime image deliberately installs no dev dependencies. It supplies a placeholder `GITHUB_TOKEN` so the suite needs no real credentials; a few tests exercise credential *resolution* and fail if nothing is configured at all.
+
+On Docker Desktop for Windows, `ruff` reports `EXE002` for every file because the build context presents them as mode 0755. Git tracks them all as `100644`, so CI on Linux does not see this.
 
 ## Auth and tenancy
 
@@ -561,8 +600,7 @@ There is also no confidence gate: `Change.confidence` exists ([detection/models.
 ### Operational
 
 - **Changelog search is not pgvector.** Embeddings are stored in a JSON column and `search_changelog` loads every matching row to score cosine in Python ([db/repository.py](app/db/repository.py)) — no vector index, no `LIMIT` pushdown.
-- **No migrations.** Schema comes from `create_all`; a Postgres advisory lock serializes concurrent boot but nothing handles schema evolution.
-- **`init_db` runs per request** on the API path (`open_session` when `DEFAULT_ENGINE is None`), adding a metadata round-trip to every call.
+- **Two schema paths.** Alembic owns the deployed Postgres schema (`docker compose` runs `alembic upgrade head` once via the `migrate` service). The CLI, the test suite and SQLite still use `create_all` directly, which is equivalent — the Alembic baseline is generated from the same models and verified to produce an empty autogenerate diff. **The ECS deploy workflow does not yet run migrations**; `deploy.yml` force-deploys the services without an `alembic upgrade head` step, so a schema change needs one run by hand until that is wired up.
 - **The broker-down fallback is unbounded.** When Redis is unreachable the full pipeline runs in a daemon thread inside the API process — no concurrency cap, no `X-GitHub-Delivery` idempotency, and the thread dies on restart.
 - **`web/` has no CI coverage.** `ci.yml` runs `ruff check app tests`, pytest, and `terraform validate`; there is no Node or `npm run build` step.
 - Semantic search falls back to keyword matching when `EMBEDDING_API_KEY` is not configured.
