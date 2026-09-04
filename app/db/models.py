@@ -2,7 +2,16 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -29,7 +38,18 @@ class Vendor(Base):
 
 
 class SpecSnapshot(Base):
+    """A content-addressed spec version.
+
+    ``digest`` is derived from ``content``, so ``(vendor_slug, digest)`` is
+    unique and re-fetching an unchanged spec is a no-op. Snapshots are shared
+    across api/worker/beat via the database rather than each process keeping a
+    private copy on local disk.
+    """
+
     __tablename__ = "spec_snapshots"
+    __table_args__ = (
+        UniqueConstraint("vendor_slug", "digest", name="uq_spec_snapshots_vendor_digest"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     vendor_slug: Mapped[str] = mapped_column(
@@ -37,7 +57,28 @@ class SpecSnapshot(Base):
     )
     digest: Mapped[str] = mapped_column(String(16))
     etag: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    spec_format: Mapped[str] = mapped_column(String(8), default="json")
+    content: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SpecPointer(Base):
+    """A named pointer to a snapshot digest — e.g. ``latest`` or ``old``.
+
+    Modelled as its own table so that moving one pointer cannot disturb
+    another. The filesystem store conflated these: writing a snapshot always
+    rewrote ``latest.json``, so pinning a baseline clobbered the latest pointer
+    and discarded its ETag.
+    """
+
+    __tablename__ = "spec_pointers"
+
+    vendor_slug: Mapped[str] = mapped_column(
+        String(64), ForeignKey("vendors.slug"), primary_key=True
+    )
+    label: Mapped[str] = mapped_column(String(32), primary_key=True)
+    digest: Mapped[str] = mapped_column(String(16))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class DetectionRun(Base):
