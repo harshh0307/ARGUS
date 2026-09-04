@@ -5,6 +5,8 @@ export interface VendorOut {
   old_spec_url: string | null;
   poll_interval_seconds: number;
   enabled: boolean;
+  is_custom: boolean;
+  spec_source: "remote" | "uploaded";
 }
 
 export interface Change {
@@ -94,6 +96,15 @@ export interface RepositoryCreated {
 
 export interface VendorCreated {
   slug: string;
+}
+
+export interface SpecUploadOut {
+  slug: string;
+  spec_file: string;
+  size: number;
+  format: string;
+  openapi_version: string;
+  detection_dispatched: boolean;
 }
 
 export interface UserOut {

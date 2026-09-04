@@ -90,7 +90,7 @@ class DetectionRun(Base):
     )
     tenant_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     old_digest: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    new_digest: Mapped[str] = mapped_column(String(16))
+    new_digest: Mapped[str | None] = mapped_column(String(16), nullable=True)
     breaking_count: Mapped[int] = mapped_column(Integer, default=0)
     additive_count: Mapped[int] = mapped_column(Integer, default=0)
     changes: Mapped[list] = mapped_column(JSON, default=list)

@@ -12,6 +12,8 @@ class VendorOut(BaseModel):
     old_spec_url: str | None = None
     poll_interval_seconds: int
     enabled: bool
+    is_custom: bool = False
+    spec_source: str = "remote"
 
 
 class DetectionRunOut(BaseModel):
@@ -159,6 +161,15 @@ class VendorIn(BaseModel):
 
 class VendorCreated(BaseModel):
     slug: str
+
+
+class SpecUploadOut(BaseModel):
+    slug: str
+    spec_file: str
+    size: int
+    format: str
+    openapi_version: str
+    detection_dispatched: bool
 
 
 # ── Auth schemas ────────────────────────────────────────────────────────

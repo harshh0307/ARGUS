@@ -39,6 +39,7 @@ from app.api.schemas import (
     RepositoryOut,
     RerunIn,
     RerunOut,
+    SpecUploadOut,
     TokenOut,
     VendorCreated,
     VendorIn,
@@ -93,9 +94,25 @@ def _list_vendor_rows(settings: Settings) -> list[VendorOut]:
             old_spec_url=v.old_spec_url,
             poll_interval_seconds=v.poll_interval_seconds,
             enabled=v.enabled,
+            is_custom=False,
+            spec_source="uploaded" if (v.spec_url.startswith("data/") or v.spec_url.startswith("data\\")) else "remote",
         )
         for v in list_vendors(settings)
     ]
+
+
+def _vendor_out_from_db(row: Vendor) -> VendorOut:
+    is_uploaded = row.spec_url.startswith("data/") or row.spec_url.startswith("data\\")
+    return VendorOut(
+        slug=row.slug,
+        name=row.name,
+        spec_url=row.spec_url,
+        old_spec_url=row.old_spec_url,
+        poll_interval_seconds=row.poll_interval_seconds,
+        enabled=row.enabled,
+        is_custom=row.is_custom,
+        spec_source="uploaded" if is_uploaded else "remote",
+    )
 
 
 def _verify_signature(secret: str, signature: str | None, body: bytes) -> bool:
@@ -435,14 +452,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 existing_slugs = {v.slug for v in result}
                 for row in custom:
                     if row.slug not in existing_slugs:
-                        result.append(VendorOut(
-                            slug=row.slug,
-                            name=row.name,
-                            spec_url=row.spec_url,
-                            old_spec_url=row.old_spec_url,
-                            poll_interval_seconds=row.poll_interval_seconds,
-                            enabled=row.enabled,
-                        ))
+                        result.append(_vendor_out_from_db(row))
             finally:
                 session.close()
         return result
@@ -459,14 +469,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     if row is not None:
                         if not current_user.is_admin and row.tenant_id is not None and row.tenant_id != current_user.tenant_id:
                             raise HTTPException(status.HTTP_404_NOT_FOUND, f"vendor {slug!r} not found")
-                        return VendorOut(
-                            slug=row.slug,
-                            name=row.name,
-                            spec_url=row.spec_url,
-                            old_spec_url=row.old_spec_url,
-                            poll_interval_seconds=row.poll_interval_seconds,
-                            enabled=row.enabled,
-                        )
+                        return _vendor_out_from_db(row)
                 finally:
                     session.close()
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"vendor {slug!r} not found")
@@ -477,6 +480,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             old_spec_url=spec.old_spec_url,
             poll_interval_seconds=spec.poll_interval_seconds,
             enabled=spec.enabled,
+            is_custom=False,
+            spec_source="uploaded" if spec.spec_url.startswith("data/") else "remote",
         )
 
     @app.post("/api/v1/vendors", response_model=VendorCreated, status_code=201)
@@ -522,14 +527,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 row.spec_url = payload.spec_url
             row.enabled = payload.enabled
             session.commit()
-            return VendorOut(
-                slug=row.slug,
-                name=row.name,
-                spec_url=row.spec_url,
-                old_spec_url=row.old_spec_url,
-                poll_interval_seconds=row.poll_interval_seconds,
-                enabled=row.enabled,
-            )
+            return _vendor_out_from_db(row)
         finally:
             session.close()
 
@@ -551,8 +549,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             session.close()
 
-    @app.post("/api/v1/vendors/{slug}/spec", status_code=201)
-    async def upload_spec(slug: str, request: Request, settings: SettingsDep, current_user: CurrentUser) -> dict:
+    @app.post("/api/v1/vendors/{slug}/spec", response_model=SpecUploadOut, status_code=201)
+    async def upload_spec(slug: str, request: Request, settings: SettingsDep, current_user: CurrentUser) -> SpecUploadOut:
         session = _db_session(settings)
         try:
             row = session.get(Vendor, slug)
@@ -562,13 +560,49 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, f"vendor {slug!r} not found")
         finally:
             session.close()
+
         body = await request.body()
         if not body:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "empty request body")
+
+        text = body.decode("utf-8", errors="replace")
+
+        import json as json_mod
+        spec_format = "json"
+        content = None
+
+        try:
+            content = json_mod.loads(text)
+            spec_format = "json"
+        except (json_mod.JSONDecodeError, UnicodeDecodeError):
+            try:
+                import yaml as yaml_mod
+                content = yaml_mod.safe_load(text)
+                spec_format = "yaml"
+            except (ValueError, yaml_mod.YAMLError):
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    "invalid file: must be valid JSON or YAML",
+                )
+
+        if not isinstance(content, dict):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "invalid spec: top level must be a JSON/YAML object",
+            )
+
+        openapi_version = content.get("openapi") or content.get("swagger")
+        if not openapi_version:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "invalid OpenAPI spec: missing 'openapi' or 'swagger' field at top level",
+            )
+
         spec_dir = Path("data/specs") / slug
         spec_dir.mkdir(parents=True, exist_ok=True)
-        spec_file = spec_dir / "current.json"
+        spec_file = spec_dir / f"current.{spec_format}"
         spec_file.write_bytes(body)
+
         session = _db_session(settings)
         try:
             row = session.get(Vendor, slug)
@@ -577,7 +611,41 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 session.commit()
         finally:
             session.close()
-        return {"slug": slug, "spec_file": str(spec_file), "size": len(body)}
+
+        dispatched, _ = _dispatch_task("argus.run_detection", args=[slug])
+
+        return SpecUploadOut(
+            slug=slug,
+            spec_file=str(spec_file),
+            size=len(body),
+            format=spec_format,
+            openapi_version=str(openapi_version),
+            detection_dispatched=dispatched,
+        )
+
+    @app.get("/api/v1/vendors/{slug}/spec")
+    def download_spec(slug: str, settings: SettingsDep, current_user: CurrentUser):
+        session = _db_session(settings)
+        try:
+            row = session.get(Vendor, slug)
+            if row is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, f"vendor {slug!r} not found")
+            if not current_user.is_admin and row.tenant_id is not None and row.tenant_id != current_user.tenant_id:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, f"vendor {slug!r} not found")
+            if not (row.spec_url.startswith("data/") or row.spec_url.startswith("data\\")):
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    "vendor does not have an uploaded spec",
+                )
+        finally:
+            session.close()
+
+        from fastapi.responses import FileResponse
+        spec_path = Path(row.spec_url)
+        if not spec_path.exists():
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "spec file not found on disk")
+        media_type = "application/yaml" if spec_path.suffix in (".yaml", ".yml") else "application/json"
+        return FileResponse(path=str(spec_path), media_type=media_type, filename=spec_path.name)
 
     @app.get("/api/v1/detection-runs", response_model=list[DetectionRunOut])
     def detection_runs(

@@ -104,7 +104,7 @@ def _diff_required(old_schema: dict, new_schema: dict, old_required: list[str] |
     new_props = new_schema.get("properties") or {}
     for prop_name in sorted(new_req - old_req):
         if prop_name not in old_props:
-            changes.append(Change(ChangeKind.REQUEST_BODY_PROPERTY_ADDED, ADDITIVE, path, method, f"{loc} new required field '{prop_name}' added", new_value=new_props.get(prop_name), schema_path=f"{loc}.{prop_name}"))
+            changes.append(Change(ChangeKind.SCHEMA_PROPERTY_ADDED, ADDITIVE, path, method, f"{loc} new required field '{prop_name}' added", new_value=new_props.get(prop_name), schema_path=f"{loc}.{prop_name}"))
         else:
             changes.append(Change(ChangeKind.REQUIRED_FIELD_ADDED, BREAKING, path, method, f"{loc} field '{prop_name}' is now required", old_value=old_props.get(prop_name), new_value=new_props.get(prop_name), schema_path=f"{loc}.{prop_name}"))
 
