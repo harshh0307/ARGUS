@@ -51,11 +51,15 @@ from app.auth.deps import AdminUser, CurrentUser
 from app.auth.jwt import create_access_token, create_refresh_token, decode_token
 from app.auth.password import hash_password, verify_password
 from app.core.config import Settings, get_settings
-from app.db.models import ApiKey, DetectionRun, PipelineRun, Repository, User, Vendor
+from app.db.models import ApiKey, DriftAlert, PipelineRun, Repository, User, Vendor
 from app.db.repository import open_session, upsert_repository
 from app.github.client import GitHubClient
 from app.registry.vendors import get_vendor, list_vendors
-from app.workers.celery_app import app as celery_app
+
+
+def _celery_app():
+    from app.workers.celery_app import app
+    return app
 
 _templates_dir = Path(__file__).parent / "templates"
 _templates = Jinja2Templates(directory=str(_templates_dir))
@@ -126,7 +130,7 @@ def _dispatch_scan_and_fix(repository_id: int, merge: bool = False) -> bool:
     """Enqueue the celery task; if the broker is unreachable, fall back to an
     inline run in a daemon thread so self-hosted setups without Redis still work."""
     try:
-        celery_app.send_task(
+        _celery_app().send_task(
             "argus.scan_and_fix", args=[repository_id], kwargs={"merge": merge}
         )
         return True
@@ -799,12 +803,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 ChangelogHitOut(
                     id=row.id,
                     vendor_slug=row.vendor_slug,
-                    kind=row.kind,
-                    path=row.path,
-                    method=row.method,
-                    detail=row.detail,
+                    kind=row.title,
+                    path=row.source_url,
+                    method="",
+                    detail=row.content[:200] if row.content else "",
                     score=score,
-                    created_at=row.created_at,
+                    created_at=row.fetched_at,
                 )
                 for row, score in hits
             ]
@@ -964,7 +968,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     def _dispatch_task(task_name: str, args: list | None = None, kwargs: dict | None = None) -> tuple[bool, str | None]:
         try:
-            result = celery_app.send_task(task_name, args=args or [], kwargs=kwargs or {})
+            result = _celery_app().send_task(task_name, args=args or [], kwargs=kwargs or {})
             return True, result.id
         except Exception:  # noqa: BLE001
 
@@ -1048,7 +1052,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             client.merge_pull_request(payload.owner, payload.repo, payload.pr_number)
 
         try:
-            celery_app.send_task(
+            _celery_app().send_task(
                 "argus.merge_pr",
                 args=[payload.owner, payload.repo, payload.pr_number],
             )

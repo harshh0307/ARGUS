@@ -1,4 +1,5 @@
-from app.detection.models import ADDITIVE, BREAKING, Change, ChangeKind
+from app.fix.strategies import ChangeKind
+from app.scan.models import DriftSignal
 from app.scan.impact import assess_impact, match_path
 from app.scan.models import AuthUsage, BodyUsage, HeaderUsage, ResponseUsage, Usage
 
@@ -24,7 +25,7 @@ def response(line=5, file="app.py", method="get", path="/repos/{owner}/{repo}", 
 
 
 def breaking(kind="endpoint_removed", method="get", path="/repos/{owner}/{repo}"):
-    return Change(kind, BREAKING, path, method, "x")
+    return DriftSignal(kind=kind, severity="breaking", path=path, method=method, detail="x")
 
 
 def test_impact_on_matching_change():
@@ -42,7 +43,7 @@ def test_no_impact_on_method_mismatch():
 
 
 def test_additive_changes_do_not_affect_impact():
-    additive = Change("endpoint_added", ADDITIVE, "/repos/{owner}/{repo}", "get", "x")
+    additive = DriftSignal(kind="endpoint_added", severity="additive", path="/repos/{owner}/{repo}", method="get", detail="x")
     assert assess_impact([usage()], [], [], [], [], [additive]) == []
 
 
@@ -69,7 +70,7 @@ def test_auth_usage_affected_by_security_change():
 
 
 def test_response_usage_affected_by_code_removal():
-    change = Change(ChangeKind.RESPONSE_CODE_REMOVED, BREAKING, "/repos/{owner}/{repo}", "get", "x", old_value="200")
+    change = DriftSignal(kind=ChangeKind.RESPONSE_CODE_REMOVED, severity="breaking", path="/repos/{owner}/{repo}", method="get", detail="x", old_value="200")
     impacts = assess_impact([], [], [], [], [response()], [change])
     assert len(impacts) == 1
     assert impacts[0].usage.status_codes_used == ("200",)

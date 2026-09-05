@@ -6,9 +6,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.detection.models import BREAKING, Change
 from app.fix.models import PatchSuggestion
-from app.scan.models import Impact, Usage
+from app.scan.models import DriftSignal, Impact, Usage
+
+BREAKING = "breaking"
 
 
 @pytest.fixture(autouse=True)
@@ -37,6 +38,26 @@ def settings():
         openrouter_api_key=None,
         openrouter_model=None,
         database_url="sqlite:///:memory:",
+        git_provider="github",
+        gitlab_token=None,
+        gitlab_url="https://gitlab.com",
+        bitbucket_token=None,
+        bitbucket_workspace=None,
+        telemetry_enabled=False,
+        telemetry_buffer_size=1000,
+        telemetry_flush_interval_seconds=30,
+        telemetry_drift_threshold=0.8,
+        telemetry_error_spike_threshold=5.0,
+        investigation_enabled=True,
+        investigation_changelog_max_age_days=90,
+        investigation_rag_top_k=5,
+        validation_enabled=True,
+        validation_timeout_seconds=300,
+        validation_memory_limit="512m",
+        validation_cpu_limit="1.0",
+        http_timeout_seconds=30.0,
+        llm_timeout_seconds=60,
+        llm_max_tokens=1024,
     )
 
 
@@ -60,7 +81,7 @@ def make_usage():
 
 @pytest.fixture
 def make_change():
-    """Factory fixture for creating Change objects."""
+    """Factory fixture for creating DriftSignal objects."""
 
     def _make(
         kind: str = "endpoint_removed",
@@ -70,8 +91,8 @@ def make_change():
         detail: str = "test change",
         old_value=None,
         new_value=None,
-    ) -> Change:
-        return Change(kind, severity, path, method, detail, old_value=old_value, new_value=new_value)
+    ) -> DriftSignal:
+        return DriftSignal(kind=kind, severity=severity, path=path, method=method, detail=detail, old_value=old_value, new_value=new_value)
 
     return _make
 
@@ -88,7 +109,7 @@ def make_impact():
         change_kind: str = "endpoint_removed",
     ) -> Impact:
         usage = Usage(file=file, line=line, method=method, path=path)
-        change = Change(change_kind, BREAKING, path, method, "test change")
+        change = DriftSignal(kind=change_kind, severity=BREAKING, path=path, method=method, detail="test change")
         return Impact(usage=usage, change=change)
 
     return _make

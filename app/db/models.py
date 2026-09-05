@@ -6,11 +6,11 @@ from sqlalchemy import (
     JSON,
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     String,
     Text,
-    UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -28,72 +28,9 @@ class Vendor(Base):
 
     slug: Mapped[str] = mapped_column(String(64), primary_key=True)
     name: Mapped[str] = mapped_column(String(128))
-    spec_url: Mapped[str] = mapped_column(Text)
-    old_spec_url: Mapped[str | None] = mapped_column(Text, nullable=True)
-    poll_interval_seconds: Mapped[int] = mapped_column(Integer, default=6 * 60 * 60)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     is_custom: Mapped[bool] = mapped_column(Boolean, default=False)
     tenant_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-
-
-class SpecSnapshot(Base):
-    """A content-addressed spec version.
-
-    ``digest`` is derived from ``content``, so ``(vendor_slug, digest)`` is
-    unique and re-fetching an unchanged spec is a no-op. Snapshots are shared
-    across api/worker/beat via the database rather than each process keeping a
-    private copy on local disk.
-    """
-
-    __tablename__ = "spec_snapshots"
-    __table_args__ = (
-        UniqueConstraint("vendor_slug", "digest", name="uq_spec_snapshots_vendor_digest"),
-    )
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    vendor_slug: Mapped[str] = mapped_column(
-        String(64), ForeignKey("vendors.slug"), index=True
-    )
-    digest: Mapped[str] = mapped_column(String(16))
-    etag: Mapped[str | None] = mapped_column(String(256), nullable=True)
-    spec_format: Mapped[str] = mapped_column(String(8), default="json")
-    content: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-
-
-class SpecPointer(Base):
-    """A named pointer to a snapshot digest — e.g. ``latest`` or ``old``.
-
-    Modelled as its own table so that moving one pointer cannot disturb
-    another. The filesystem store conflated these: writing a snapshot always
-    rewrote ``latest.json``, so pinning a baseline clobbered the latest pointer
-    and discarded its ETag.
-    """
-
-    __tablename__ = "spec_pointers"
-
-    vendor_slug: Mapped[str] = mapped_column(
-        String(64), ForeignKey("vendors.slug"), primary_key=True
-    )
-    label: Mapped[str] = mapped_column(String(32), primary_key=True)
-    digest: Mapped[str] = mapped_column(String(16))
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-
-
-class DetectionRun(Base):
-    __tablename__ = "detection_runs"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    vendor_slug: Mapped[str] = mapped_column(
-        String(64), ForeignKey("vendors.slug"), index=True
-    )
-    tenant_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
-    old_digest: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    new_digest: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    breaking_count: Mapped[int] = mapped_column(Integer, default=0)
-    additive_count: Mapped[int] = mapped_column(Integer, default=0)
-    changes: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -104,6 +41,7 @@ class Repository(Base):
     tenant_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     owner: Mapped[str] = mapped_column(String(128))
     name: Mapped[str] = mapped_column(String(128))
+    git_provider: Mapped[str] = mapped_column(String(32), default="github")
     vendor_slug: Mapped[str] = mapped_column(String(64), default="github")
     default_branch: Mapped[str | None] = mapped_column(String(128), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -122,23 +60,61 @@ class AppInstallation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class TelemetryEvent(Base):
+    __tablename__ = "telemetry_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    vendor_slug: Mapped[str] = mapped_column(String(64), index=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    endpoint: Mapped[str] = mapped_column(String(256))
+    method: Mapped[str] = mapped_column(String(10))
+    path: Mapped[str] = mapped_column(String(256))
+    status_code: Mapped[int] = mapped_column(Integer)
+    response_schema_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    request_body_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    drift_detected: Mapped[bool] = mapped_column(Boolean, default=False)
+    drift_details: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class DriftAlert(Base):
+    __tablename__ = "drift_alerts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    vendor_slug: Mapped[str] = mapped_column(String(64), index=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    alert_type: Mapped[str] = mapped_column(String(32))
+    severity: Mapped[str] = mapped_column(String(16))
+    endpoint: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    details: Mapped[dict] = mapped_column(JSON)
+    resolved: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Investigation(Base):
+    __tablename__ = "investigations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    drift_alert_id: Mapped[int] = mapped_column(ForeignKey("drift_alerts.id"))
+    vendor_slug: Mapped[str] = mapped_column(String(64))
+    changelog_snippets: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    doc_references: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    context_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    confidence_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class ChangelogEntry(Base):
     __tablename__ = "changelog_entries"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    vendor_slug: Mapped[str] = mapped_column(
-        String(64), ForeignKey("vendors.slug"), index=True
-    )
-    tenant_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
-    run_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("detection_runs.id"), nullable=True, index=True
-    )
-    kind: Mapped[str] = mapped_column(String(16))
-    path: Mapped[str] = mapped_column(Text)
-    method: Mapped[str] = mapped_column(String(64))
-    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    vendor_slug: Mapped[str] = mapped_column(String(64), index=True)
+    source_url: Mapped[str] = mapped_column(String(512))
+    title: Mapped[str] = mapped_column(String(512))
+    content: Mapped[str] = mapped_column(Text)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     embedding: Mapped[list | None] = mapped_column(JSON, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class User(Base):
@@ -176,6 +152,9 @@ class PipelineRun(Base):
     status: Mapped[str] = mapped_column(String(16), default="queued")
     current_step: Mapped[str | None] = mapped_column(String(32), nullable=True)
     task_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    drift_alert_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("drift_alerts.id"), nullable=True
+    )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     pr_number: Mapped[int | None] = mapped_column(Integer, nullable=True)

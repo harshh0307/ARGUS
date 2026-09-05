@@ -1,7 +1,7 @@
 import ast
 
-from app.detection.models import BREAKING, Change
 from app.fix.agent import fix_impact_on_content, run_fix
+from app.scan.models import DriftSignal
 from app.fix.models import PatchSuggestion
 from app.fix.patch import apply_patch, validate_python
 from app.scan.models import Impact, Usage
@@ -24,7 +24,7 @@ class FakeSuggestionModel:
 def impact(file, line=3, method="get", path="/repos/{owner}/{repo}/tags/protection"):
     return Impact(
         usage=Usage(file=str(file), line=line, method=method, path=path),
-        change=Change("endpoint_removed", BREAKING, path, method, "endpoint is no longer documented"),
+        change=DriftSignal(kind="endpoint_removed", severity="breaking", path=path, method=method, detail="endpoint is no longer documented"),
     )
 
 
@@ -162,8 +162,8 @@ def test_non_endpoint_removed_kind_skips_semantic_check():
     model = FakeSuggestionModel(
         PatchSuggestion(file="app.py", line=2, action="replace", replacement="x = 1")
     )
-    change = Change(
-        "param_removed", BREAKING, "/repos/{owner}/{repo}/tags/protection", "get", "p removed"
+    change = DriftSignal(
+        kind="param_removed", severity="breaking", path="/repos/{owner}/{repo}/tags/protection", method="get", detail="p removed"
     )
     imp = Impact(Usage("app.py", 2, "get", "/repos/{owner}/{repo}/tags/protection"), change)
     fixed, err = fix_impact_on_content(

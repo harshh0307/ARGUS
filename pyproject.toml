@@ -1,7 +1,7 @@
 [project]
 name = "argus"
-version = "0.1.0"
-description = "Argus - the changelog that reads your codebase"
+version = "0.2.0"
+description = "Argus - autonomous API drift detection, investigation, and healing"
 requires-python = ">=3.14"
 dependencies = [
     "httpx>=0.28,<1.0",
@@ -22,6 +22,17 @@ dependencies = [
     "python-jose[cryptography]>=3.3,<4.0",
     "slowapi>=0.1.10",
     "alembic>=1.14,<2.0",
+    # Telemetry Layer
+    "opentelemetry-api>=1.20,<2.0",
+    "opentelemetry-sdk>=1.20,<2.0",
+    # Investigation Layer
+    "trafilatura>=1.12,<2.0",
+    "feedparser>=6.0,<7.0",
+    # Validation Layer
+    "docker>=7.0,<8.0",
+    # Multi-provider Git
+    "python-gitlab>=3.0,<4.0",
+    "atlassian-python-api>=3.0,<4.0",
 ]
 
 [project.optional-dependencies]

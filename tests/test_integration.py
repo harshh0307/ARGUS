@@ -7,7 +7,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.detection.models import BREAKING, Change, ChangeKind
+from app.fix.strategies import ChangeKind
+from app.scan.models import DriftSignal
 from app.fix.ast_validators import validate_source
 from app.fix.models import PatchSuggestion
 from app.fix.patch import apply_patch
@@ -79,12 +80,12 @@ func createRepo(name string) (*http.Response, error) {
         usages, headers, bodies, auths, responses = scanner.scan(sample_python_file.parent)
 
         changes = [
-            Change(
-                ChangeKind.ENDPOINT_REMOVED,
-                BREAKING,
-                "/repos/{owner}/{repo}",
-                "delete",
-                "endpoint removed",
+            DriftSignal(
+                kind=ChangeKind.ENDPOINT_REMOVED,
+                severity="breaking",
+                path="/repos/{owner}/{repo}",
+                method="delete",
+                detail="endpoint removed",
             )
         ]
 
@@ -99,12 +100,12 @@ func createRepo(name string) (*http.Response, error) {
         usages, headers, bodies, auths, responses = scanner.scan(sample_python_file.parent)
 
         changes = [
-            Change(
-                ChangeKind.ENDPOINT_REMOVED,
-                BREAKING,
-                "/nonexistent/{path}",
-                "get",
-                "endpoint removed",
+            DriftSignal(
+                kind=ChangeKind.ENDPOINT_REMOVED,
+                severity="breaking",
+                path="/nonexistent/{path}",
+                method="get",
+                detail="endpoint removed",
             )
         ]
 
@@ -395,12 +396,12 @@ class TestFullPipelineIntegration:
 
         # Create matching change
         changes = [
-            Change(
-                ChangeKind.ENDPOINT_REMOVED,
-                BREAKING,
-                "/repos/{owner}/{repo}",
-                "get",
-                "endpoint removed",
+            DriftSignal(
+                kind=ChangeKind.ENDPOINT_REMOVED,
+                severity="breaking",
+                path="/repos/{owner}/{repo}",
+                method="get",
+                detail="endpoint removed",
             )
         ]
 

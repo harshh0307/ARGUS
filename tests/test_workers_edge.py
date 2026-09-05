@@ -18,7 +18,6 @@ def make_settings(**overrides):
         "openai_api_key": "k",
         "openrouter_api_key": None,
         "openrouter_model": None,
-        "snapshot_dir": "data/snapshots",
         "database_url": None,
     }
     defaults.update(overrides)
@@ -33,9 +32,8 @@ def seeded(tmp_path):
     return settings, engine
 
 
-def test_run_detection_persists_when_database_configured(monkeypatch, tmp_path):
+def test_run_detection_returns_result(monkeypatch, tmp_path):
     settings, _ = seeded(tmp_path)
-    captured = {}
 
     monkeypatch.setattr(tasks, "get_settings", lambda: settings)
     monkeypatch.setattr(
@@ -49,21 +47,11 @@ def test_run_detection_persists_when_database_configured(monkeypatch, tmp_path):
             "changes": [],
         },
     )
-    monkeypatch.setattr(tasks, "get_vendor", lambda settings, slug: SimpleNamespace(slug=slug))
-    monkeypatch.setattr(
-        tasks,
-        "persist_detection",
-        lambda s, slug, result, vendor: captured.update(
-            slug=slug, result=result, vendor=vendor
-        ),
-    )
 
     result = tasks.run_detection("github")
 
     assert result["breaking_count"] == 3
     assert result["additive_count"] == 2
-    assert captured["slug"] == "github"
-    assert captured["result"]["breaking_count"] == 3
 
 
 def test_run_detection_skips_persist_without_database(monkeypatch):
@@ -81,15 +69,10 @@ def test_run_detection_skips_persist_without_database(monkeypatch):
             "changes": [],
         },
     )
-    monkeypatch.setattr(tasks, "get_vendor", lambda settings, slug: SimpleNamespace(slug=slug))
-    monkeypatch.setattr(
-        tasks, "persist_detection", lambda *a: called.update(n=called["n"] + 1)
-    )
 
     result = tasks.run_detection("github")
 
     assert result["baselined"] is True
-    assert called["n"] == 0
 
 
 def test_scan_and_fix_without_pr_result(monkeypatch, tmp_path):
