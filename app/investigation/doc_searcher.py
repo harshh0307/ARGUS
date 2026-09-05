@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from app.core.config import Settings
 from app.investigation.models import ChangelogChunk, SearchResult
@@ -66,7 +65,7 @@ class DocSearcher:
             return []
         try:
             query_vec = self._embedder([query])[0]
-        except Exception:
+        except Exception:  # noqa: BLE001
             return []
 
         scored = []
@@ -80,7 +79,7 @@ class DocSearcher:
                         score=sim,
                         source="changelog",
                     ))
-                except Exception:
+                except Exception:  # noqa: BLE001, S110
                     pass
 
         scored.sort(key=lambda r: r.score, reverse=True)

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -43,7 +42,7 @@ class BitbucketProvider(GitProvider):
                 private=data.get("is_private", True),
                 provider="bitbucket",
             )
-        except Exception:
+        except Exception:  # noqa: BLE001
             return None
 
     def checkout(self, owner: str, name: str, ref: str, dest: Path) -> None:
@@ -53,7 +52,7 @@ class BitbucketProvider(GitProvider):
                 f"{self._repo_path(owner, name)}/download/{ref}.tar.gz",
             )
             self._extract_tarball(resp.content, dest)
-        except Exception:
+        except Exception:  # noqa: BLE001
             url = f"https://x-token-auth:{self._token}@bitbucket.org/{owner}/{name}.git"
             self._git_clone(url, ref, dest)
 

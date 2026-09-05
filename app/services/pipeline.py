@@ -3,7 +3,6 @@ from __future__ import annotations
 import io
 import logging
 import tarfile
-import tempfile
 import time
 from contextlib import chdir
 from dataclasses import dataclass, field
@@ -159,7 +158,7 @@ def _get_drift_signals(settings: Settings, vendor_slug: str) -> list[DriftSignal
     if not settings.database_url:
         return []
     try:
-        from app.db.repository import open_session, list_open_drift_alerts
+        from app.db.repository import list_open_drift_alerts, open_session
         session = open_session(settings)
         try:
             alerts = list_open_drift_alerts(session, vendor_slug=vendor_slug)
@@ -176,10 +175,8 @@ def _get_drift_signals(settings: Settings, vendor_slug: str) -> list[DriftSignal
             ]
         finally:
             session.close()
-    except Exception:
+    except Exception:  # noqa: BLE001
         return []
-
-
 def fix_directory(
     settings: Settings,
     root: Path,
@@ -253,9 +250,7 @@ def run_repo_pipeline(
     vendor_slug: str = "github",
     repository_id: int | None = None,
 ) -> PipelineOutcome:
-    from app.github.pr import PRLoopResult
 
-    pr_result = None
     try:
         root = Path(".")
         impacts = scan_changes(settings, vendor_slug, root)
@@ -268,9 +263,8 @@ def run_repo_pipeline(
         guidance = _vendor_guidance(settings, vendor_slug)
         from app.github.client import GitHubClient
         client = GitHubClient(token=settings.github_token)
-        repo_info = client.get_repo_info(owner, name)
-        base = repo_info.get("default_branch", "main")
-        branch = branch or f"argus/fix"
+        client.get_repo_info(owner, name)
+        branch = branch or "argus/fix"
         with chdir(root):
             results = run_fix(
                 impacts,
@@ -282,7 +276,7 @@ def run_repo_pipeline(
         outcome.steps = results
         outcome.record_completion()
         return outcome
-    except Exception as exc:
+    except Exception:
         logger.exception("Pipeline failed")
         outcome = PipelineOutcome()
         outcome.record_completion()

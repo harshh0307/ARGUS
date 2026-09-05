@@ -17,7 +17,7 @@ from app.db.models import (
     Vendor,
 )
 from app.registry.vendors import Vendor as VendorSpec
-from app.search.embeddings import build_embedder, cosine_similarity
+from app.search.embeddings import cosine_similarity
 
 DEFAULT_ENGINE = None
 

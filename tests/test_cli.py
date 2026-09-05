@@ -5,11 +5,7 @@ import tarfile
 from types import SimpleNamespace
 
 from app import cli
-from app.fix.models import FixResult, PatchSuggestion
-from app.scan.models import DriftSignal
-from app.github.client import GitHubApiError
-from app.github.pr import PRLoopResult
-from app.scan.models import Impact, Usage
+from app.scan.models import DriftSignal, Impact, Usage
 from app.services import pipeline as svc
 
 

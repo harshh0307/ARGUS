@@ -13,6 +13,7 @@ def _get_app():
         return _app
     try:
         from celery import Celery
+
         from app.core.config import get_settings
 
         settings = get_settings()

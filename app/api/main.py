@@ -21,8 +21,8 @@ from app.api.schemas import (
     ApiKeyOut,
     ChangelogHitOut,
     DetectIn,
-    DetectionRunOut,
     DetectOut,
+    DriftAlertOut,
     InstallationOut,
     LoginIn,
     MergeIn,
@@ -39,7 +39,6 @@ from app.api.schemas import (
     RepositoryOut,
     RerunIn,
     RerunOut,
-    SpecUploadOut,
     TokenOut,
     VendorCreated,
     VendorIn,
@@ -94,28 +93,21 @@ def _list_vendor_rows(settings: Settings) -> list[VendorOut]:
         VendorOut(
             slug=v.slug,
             name=v.name,
-            spec_url=v.spec_url,
-            old_spec_url=v.old_spec_url,
-            poll_interval_seconds=v.poll_interval_seconds,
             enabled=v.enabled,
-            is_custom=False,
-            spec_source="uploaded" if (v.spec_url.startswith("data/") or v.spec_url.startswith("data\\")) else "remote",
+            base_api_url=v.base_api_url,
+            changelog_urls=v.changelog_urls,
+            docs_url=v.docs_url,
+            fix_guidance=v.fix_guidance,
         )
         for v in list_vendors(settings)
     ]
 
 
 def _vendor_out_from_db(row: Vendor) -> VendorOut:
-    is_uploaded = row.spec_url.startswith("data/") or row.spec_url.startswith("data\\")
     return VendorOut(
         slug=row.slug,
         name=row.name,
-        spec_url=row.spec_url,
-        old_spec_url=row.old_spec_url,
-        poll_interval_seconds=row.poll_interval_seconds,
         enabled=row.enabled,
-        is_custom=row.is_custom,
-        spec_source="uploaded" if is_uploaded else "remote",
     )
 
 
@@ -443,55 +435,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/v1/vendors", response_model=list[VendorOut])
     def vendors(settings: SettingsDep, current_user: CurrentUser) -> list[VendorOut]:
-        result = _list_vendor_rows(settings)
-        if settings.database_url:
-            session = _db_session(settings)
-            try:
-                stmt = select(Vendor).where(Vendor.is_custom.is_(True))
-                if not current_user.is_admin:
-                    stmt = stmt.where(
-                        (Vendor.tenant_id == current_user.tenant_id) | (Vendor.tenant_id.is_(None))
-                    )
-                custom = session.execute(stmt).scalars().all()
-                existing_slugs = {v.slug for v in result}
-                for row in custom:
-                    if row.slug not in existing_slugs:
-                        result.append(_vendor_out_from_db(row))
-            finally:
-                session.close()
-        return result
+        return _list_vendor_rows(settings)
 
     @app.get("/api/v1/vendors/{slug}", response_model=VendorOut)
     def vendor(slug: str, settings: SettingsDep, current_user: CurrentUser) -> VendorOut:
         try:
             spec = get_vendor(settings, slug)
         except ValueError:
-            if settings.database_url:
-                session = _db_session(settings)
-                try:
-                    row = session.get(Vendor, slug)
-                    if row is not None:
-                        if not current_user.is_admin and row.tenant_id is not None and row.tenant_id != current_user.tenant_id:
-                            raise HTTPException(status.HTTP_404_NOT_FOUND, f"vendor {slug!r} not found")
-                        return _vendor_out_from_db(row)
-                finally:
-                    session.close()
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"vendor {slug!r} not found")
         return VendorOut(
             slug=spec.slug,
             name=spec.name,
-            spec_url=spec.spec_url,
-            old_spec_url=spec.old_spec_url,
-            poll_interval_seconds=spec.poll_interval_seconds,
             enabled=spec.enabled,
-            is_custom=False,
-            spec_source="uploaded" if spec.spec_url.startswith("data/") else "remote",
+            base_api_url=spec.base_api_url,
+            changelog_urls=spec.changelog_urls,
+            docs_url=spec.docs_url,
+            fix_guidance=spec.fix_guidance,
         )
 
     @app.post("/api/v1/vendors", response_model=VendorCreated, status_code=201)
     def create_vendor(payload: VendorIn, settings: SettingsDep, current_user: CurrentUser) -> VendorCreated:
         slug = payload.slug or payload.name.lower().replace(" ", "_").replace("-", "_")
-        spec_url = payload.spec_url or f"data/specs/{slug}/current.json"
         session = _db_session(settings)
         try:
             existing = session.get(Vendor, slug)
@@ -502,8 +466,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             row = Vendor(
                 slug=slug,
                 name=payload.name,
-                spec_url=spec_url,
-                is_custom=True,
                 enabled=payload.enabled,
                 tenant_id=current_user.tenant_id,
             )
@@ -520,15 +482,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             row = session.get(Vendor, slug)
             if row is None:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, f"vendor {slug!r} not found")
-            if not row.is_custom:
-                raise HTTPException(
-                    status.HTTP_400_BAD_REQUEST, "cannot modify built-in vendor"
-                )
             if not current_user.is_admin and row.tenant_id is not None and row.tenant_id != current_user.tenant_id:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, f"vendor {slug!r} not found")
             row.name = payload.name
-            if payload.spec_url is not None:
-                row.spec_url = payload.spec_url
             row.enabled = payload.enabled
             session.commit()
             return _vendor_out_from_db(row)
@@ -542,10 +498,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             row = session.get(Vendor, slug)
             if row is None:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, f"vendor {slug!r} not found")
-            if not row.is_custom:
-                raise HTTPException(
-                    status.HTTP_400_BAD_REQUEST, "cannot delete built-in vendor"
-                )
             if not current_user.is_admin and row.tenant_id is not None and row.tenant_id != current_user.tenant_id:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, f"vendor {slug!r} not found")
             session.delete(row)
@@ -553,126 +505,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             session.close()
 
-    @app.post("/api/v1/vendors/{slug}/spec", response_model=SpecUploadOut, status_code=201)
-    async def upload_spec(slug: str, request: Request, settings: SettingsDep, current_user: CurrentUser) -> SpecUploadOut:
-        session = _db_session(settings)
-        try:
-            row = session.get(Vendor, slug)
-            if row is None:
-                raise HTTPException(status.HTTP_404_NOT_FOUND, f"vendor {slug!r} not found")
-            if not current_user.is_admin and row.tenant_id is not None and row.tenant_id != current_user.tenant_id:
-                raise HTTPException(status.HTTP_404_NOT_FOUND, f"vendor {slug!r} not found")
-        finally:
-            session.close()
-
-        body = await request.body()
-        if not body:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "empty request body")
-
-        text = body.decode("utf-8", errors="replace")
-
-        import json as json_mod
-        spec_format = "json"
-        content = None
-
-        try:
-            content = json_mod.loads(text)
-            spec_format = "json"
-        except (json_mod.JSONDecodeError, UnicodeDecodeError):
-            try:
-                import yaml as yaml_mod
-                content = yaml_mod.safe_load(text)
-                spec_format = "yaml"
-            except (ValueError, yaml_mod.YAMLError):
-                raise HTTPException(
-                    status.HTTP_400_BAD_REQUEST,
-                    "invalid file: must be valid JSON or YAML",
-                )
-
-        if not isinstance(content, dict):
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                "invalid spec: top level must be a JSON/YAML object",
-            )
-
-        openapi_version = content.get("openapi") or content.get("swagger")
-        if not openapi_version:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                "invalid OpenAPI spec: missing 'openapi' or 'swagger' field at top level",
-            )
-
-        spec_dir = Path("data/specs") / slug
-        spec_dir.mkdir(parents=True, exist_ok=True)
-        spec_file = spec_dir / f"current.{spec_format}"
-        spec_file.write_bytes(body)
-
-        session = _db_session(settings)
-        try:
-            row = session.get(Vendor, slug)
-            if row is not None:
-                row.spec_url = str(spec_file)
-                session.commit()
-        finally:
-            session.close()
-
-        dispatched, _ = _dispatch_task("argus.run_detection", args=[slug])
-
-        return SpecUploadOut(
-            slug=slug,
-            spec_file=str(spec_file),
-            size=len(body),
-            format=spec_format,
-            openapi_version=str(openapi_version),
-            detection_dispatched=dispatched,
-        )
-
-    @app.get("/api/v1/vendors/{slug}/spec")
-    def download_spec(slug: str, settings: SettingsDep, current_user: CurrentUser):
-        session = _db_session(settings)
-        try:
-            row = session.get(Vendor, slug)
-            if row is None:
-                raise HTTPException(status.HTTP_404_NOT_FOUND, f"vendor {slug!r} not found")
-            if not current_user.is_admin and row.tenant_id is not None and row.tenant_id != current_user.tenant_id:
-                raise HTTPException(status.HTTP_404_NOT_FOUND, f"vendor {slug!r} not found")
-            if not (row.spec_url.startswith("data/") or row.spec_url.startswith("data\\")):
-                raise HTTPException(
-                    status.HTTP_400_BAD_REQUEST,
-                    "vendor does not have an uploaded spec",
-                )
-        finally:
-            session.close()
-
-        from fastapi.responses import FileResponse
-        spec_path = Path(row.spec_url)
-        if not spec_path.exists():
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "spec file not found on disk")
-        media_type = "application/yaml" if spec_path.suffix in (".yaml", ".yml") else "application/json"
-        return FileResponse(path=str(spec_path), media_type=media_type, filename=spec_path.name)
-
-    @app.get("/api/v1/detection-runs", response_model=list[DetectionRunOut])
+    @app.get("/api/v1/detection-runs", response_model=list[DriftAlertOut])
     def detection_runs(
         settings: SettingsDep, current_user: CurrentUser, limit: int = Query(default=50, ge=1, le=500)
-    ) -> list[DetectionRunOut]:
+    ) -> list[DriftAlertOut]:
         session = _db_session(settings)
         try:
-            stmt = select(DetectionRun).order_by(DetectionRun.id.desc()).limit(limit)
+            stmt = select(DriftAlert).order_by(DriftAlert.id.desc()).limit(limit)
             if not current_user.is_admin:
                 stmt = stmt.where(
-                    (DetectionRun.tenant_id == current_user.tenant_id)
-                    | (DetectionRun.tenant_id.is_(None))
+                    (DriftAlert.tenant_id == current_user.tenant_id)
+                    | (DriftAlert.tenant_id.is_(None))
                 )
             rows = session.execute(stmt).scalars().all()
             return [
-                DetectionRunOut(
+                DriftAlertOut(
                     id=r.id,
                     vendor_slug=r.vendor_slug,
-                    old_digest=r.old_digest,
-                    new_digest=r.new_digest,
-                    breaking_count=r.breaking_count,
-                    additive_count=r.additive_count,
-                    changes=r.changes or [],
+                    alert_type=r.alert_type,
+                    severity=r.severity,
+                    endpoint=r.endpoint,
+                    details=r.details or {},
+                    resolved=r.resolved,
                     created_at=r.created_at,
                 )
                 for r in rows
@@ -680,25 +534,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             session.close()
 
-    @app.get("/api/v1/detection-runs/{run_id}", response_model=DetectionRunOut)
-    def detection_run(run_id: int, settings: SettingsDep, current_user: CurrentUser) -> DetectionRunOut:
+    @app.get("/api/v1/detection-runs/{run_id}", response_model=DriftAlertOut)
+    def detection_run(run_id: int, settings: SettingsDep, current_user: CurrentUser) -> DriftAlertOut:
         session = _db_session(settings)
         try:
-            row = session.get(DetectionRun, run_id)
+            row = session.get(DriftAlert, run_id)
             if row is None:
                 raise HTTPException(
                     status.HTTP_404_NOT_FOUND, f"detection run {run_id} not found"
                 )
             if not current_user.is_admin and row.tenant_id is not None and row.tenant_id != current_user.tenant_id:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, f"detection run {run_id} not found")
-            return DetectionRunOut(
+            return DriftAlertOut(
                 id=row.id,
                 vendor_slug=row.vendor_slug,
-                old_digest=row.old_digest,
-                new_digest=row.new_digest,
-                breaking_count=row.breaking_count,
-                additive_count=row.additive_count,
-                changes=row.changes or [],
+                alert_type=row.alert_type,
+                severity=row.severity,
+                endpoint=row.endpoint,
+                details=row.details or {},
+                resolved=row.resolved,
                 created_at=row.created_at,
             )
         finally:
@@ -743,7 +597,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 payload.owner,
                 payload.name,
                 payload.default_branch,
-                payload.vendor_slug,
+                vendor_slug=payload.vendor_slug,
             )
             row.tenant_id = current_user.tenant_id
             session.commit()
@@ -889,22 +743,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session = _db_session(settings)
         try:
             events: list[ActivityEventOut] = []
-            det_stmt = select(DetectionRun).order_by(DetectionRun.id.desc()).limit(limit)
+            det_stmt = select(DriftAlert).order_by(DriftAlert.id.desc()).limit(limit)
             if not current_user.is_admin:
                 det_stmt = det_stmt.where(
-                    (DetectionRun.tenant_id == current_user.tenant_id)
-                    | (DetectionRun.tenant_id.is_(None))
+                    (DriftAlert.tenant_id == current_user.tenant_id)
+                    | (DriftAlert.tenant_id.is_(None))
                 )
             detections = session.execute(det_stmt).scalars().all()
             for r in detections:
-                total = r.breaking_count + r.additive_count
-                title = f"Detected {r.breaking_count} breaking, {r.additive_count} additive changes in {r.vendor_slug}"
+                title = f"Drift alert: {r.alert_type} ({r.severity}) in {r.vendor_slug}"
                 events.append(ActivityEventOut(
                     kind="detection",
                     timestamp=r.created_at,
                     title=title,
-                    detail=f"Run #{r.id} — {total} total changes",
-                    status="breaking" if r.breaking_count > 0 else "additive",
+                    detail=f"Alert #{r.id} — {r.endpoint or 'N/A'}",
+                    status=r.severity,
                 ))
             pipe_stmt = (
                 select(PipelineRun)

@@ -7,14 +7,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.fix.strategies import ChangeKind
-from app.scan.models import DriftSignal
 from app.fix.ast_validators import validate_source
 from app.fix.models import PatchSuggestion
 from app.fix.patch import apply_patch
 from app.fix.semantic_guards import run_semantic_guard
-from app.fix.strategies import get_strategy, needs_llm
+from app.fix.strategies import ChangeKind, get_strategy, needs_llm
 from app.scan.impact import assess_impact
+from app.scan.models import DriftSignal
 from app.scan.scanner import ApiScanner
 
 # ── Detection → Scanning → Impact Flow ─────────────────────────────────────

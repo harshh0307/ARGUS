@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -44,14 +43,14 @@ class GitHubProvider(GitProvider):
                 private=data.get("private", False),
                 provider="github",
             )
-        except Exception:
+        except Exception:  # noqa: BLE001
             return None
 
     def checkout(self, owner: str, name: str, ref: str, dest: Path) -> None:
         try:
             resp = self._request("GET", f"/repos/{owner}/{name}/tarball/{ref}")
             self._extract_tarball(resp.content, dest)
-        except Exception:
+        except Exception:  # noqa: BLE001
             url = f"https://x-access-token:{self._token}@github.com/{owner}/{name}.git"
             self._git_clone(url, ref, dest)
 
@@ -124,7 +123,7 @@ class GitHubProvider(GitProvider):
                 )
                 for check in data.get("check_runs", [])
             ]
-        except Exception:
+        except Exception:  # noqa: BLE001
             return []
 
     def merge_pr(self, owner: str, name: str, pr_number: int) -> None:

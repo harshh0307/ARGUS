@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from app.core.config import Settings
 
@@ -138,7 +138,6 @@ BUILTIN_VENDORS: dict[str, Vendor] = {
 
 def get_vendor(settings: Settings, slug: str = "github") -> Vendor:
     if slug == "github":
-        spec_url = getattr(settings, "github_spec_url", None)
         return Vendor(
             slug="github",
             name="GitHub REST API",

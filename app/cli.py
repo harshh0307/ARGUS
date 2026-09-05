@@ -6,7 +6,6 @@ import sys
 from pathlib import Path
 
 from app.core.config import get_settings
-from app.registry.vendors import get_vendor as registry_get_vendor
 from app.registry.vendors import list_vendors
 
 
@@ -69,7 +68,7 @@ def cmd_fix(args) -> int:
     root = Path(args.dir)
     languages = getattr(args, "languages", None)
 
-    from app.services.pipeline import scan_changes, fix_directory
+    from app.services.pipeline import fix_directory
 
     vendor_slug = getattr(args, "vendor", "github")
     try:
@@ -116,7 +115,7 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("interrupted", file=sys.stderr)
         return 130
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         print(f"error: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
 

@@ -3,7 +3,6 @@
 import time
 from unittest.mock import MagicMock
 
-from app.fix.strategies import ChangeKind
 from app.fix.ast_validators import (
     validate_csharp,
     validate_go,
@@ -18,6 +17,7 @@ from app.fix.circuit_breaker import CircuitBreaker, MultiLLMRouter
 from app.fix.models import FixResult, FixStrategy, PatchSuggestion
 from app.fix.semantic_guards import run_semantic_guard
 from app.fix.strategies import (
+    ChangeKind,
     get_strategy,
     needs_llm,
     register_strategy,

@@ -109,9 +109,7 @@ def _header_matches_signal(header: HeaderUsage, signal: DriftSignal) -> bool:
         return header.context in ("bearer", "api_key", "auth")
     if signal.kind == "content_type_changed":
         return header.header_name.lower() == "content-type"
-    if signal.kind in ("header_removed", "header_added"):
-        return True
-    return False
+    return signal.kind in ("header_removed", "header_added")
 
 
 def _body_matches_signal(body: BodyUsage, signal: DriftSignal) -> bool:
@@ -121,9 +119,7 @@ def _body_matches_signal(body: BodyUsage, signal: DriftSignal) -> bool:
         return signal.new_value in body.fields_used if signal.new_value else False
     if signal.kind == "required_field_added":
         return signal.new_value not in body.fields_used if signal.new_value else False
-    if signal.kind in ("schema_type_changed", "enum_value_removed"):
-        return True
-    return False
+    return signal.kind in ("schema_type_changed", "enum_value_removed")
 
 
 def _auth_matches_signal(auth: AuthUsage, signal: DriftSignal) -> bool:
@@ -137,6 +133,4 @@ def _auth_matches_signal(auth: AuthUsage, signal: DriftSignal) -> bool:
 def _response_matches_signal(resp: ResponseUsage, signal: DriftSignal) -> bool:
     if signal.kind == "response_code_removed":
         return signal.old_value in resp.status_codes_used if signal.old_value else False
-    if signal.kind in ("response结构调整", "schema_type_changed", "schema_field_removed"):
-        return True
-    return False
+    return signal.kind in ("response结构调整", "schema_type_changed", "schema_field_removed")

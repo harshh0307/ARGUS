@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from typing import Any
 
 from app.fix.ast_validators import validate_source
 from app.fix.strategies import get_strategy
@@ -65,7 +64,6 @@ def _find_match(pattern: str, content: str, target_line: int) -> re.Match | None
     if target_line <= 0:
         return matches[0]
 
-    lines = content.split("\n")
     best = None
     best_dist = float("inf")
     for m in matches:

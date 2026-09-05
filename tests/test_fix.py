@@ -1,10 +1,9 @@
 import ast
 
 from app.fix.agent import fix_impact_on_content, run_fix
-from app.scan.models import DriftSignal
 from app.fix.models import PatchSuggestion
 from app.fix.patch import apply_patch, validate_python
-from app.scan.models import Impact, Usage
+from app.scan.models import DriftSignal, Impact, Usage
 
 
 class FakeSuggestionModel:

@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import time
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
@@ -13,7 +12,7 @@ import httpx
 from app.core.config import Settings
 from app.telemetry.buffer import TelemetryBuffer
 from app.telemetry.drift_detector import DriftDetector
-from app.telemetry.models import DriftAlert, TelemetryEvent
+from app.telemetry.models import TelemetryEvent
 
 _endpoint_segment_re = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
@@ -33,7 +32,6 @@ class ArgusClient:
         self._buffer = TelemetryBuffer(settings)
 
     def request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
-        start = time.monotonic()
         response = self._client.request(method, url, **kwargs)
 
         endpoint = self._extract_endpoint(url, method)
@@ -41,7 +39,7 @@ class ArgusClient:
         body = None
         try:
             body = response.json()
-        except Exception:
+        except Exception:  # noqa: BLE001
             body = None
 
         drift = self._detector.check(endpoint, response.status_code, body)
@@ -81,15 +79,13 @@ class ArgusClient:
         try:
             parsed = urlparse(url)
             path = parsed.path
-        except Exception:
+        except Exception:  # noqa: BLE001
             path = url
 
         segments = path.strip("/").split("/")
         normalized = []
         for seg in segments:
-            if _endpoint_segment_re.match(seg):
-                normalized.append("{id}")
-            elif re.match(r"^\d+$", seg):
+            if _endpoint_segment_re.match(seg) or re.match(r"^\d+$", seg):
                 normalized.append("{id}")
             else:
                 normalized.append(seg)
@@ -103,5 +99,5 @@ class ArgusClient:
             schema = self._detector._extract_schema(body)
             raw = json.dumps(schema, sort_keys=True)
             return hashlib.sha256(raw.encode()).hexdigest()[:16]
-        except Exception:
+        except Exception:  # noqa: BLE001
             return None

@@ -48,7 +48,7 @@ class Sandbox:
 
         try:
             client.images.pull(image)
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.warning("could not pull image %s, using local", image)
 
         start = time.monotonic()
@@ -75,7 +75,7 @@ class Sandbox:
                 output=logs,
                 duration_seconds=duration,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             duration = time.monotonic() - start
             return TestResult(
                 passed=False,
@@ -87,5 +87,5 @@ class Sandbox:
             if container is not None:
                 try:
                     container.remove(force=True)
-                except Exception:
+                except Exception:  # noqa: BLE001, S110
                     pass

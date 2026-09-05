@@ -4,7 +4,7 @@ import logging
 import queue
 import threading
 import time
-from typing import Any, Callable
+from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,7 @@ class InlineTaskQueue:
                 result = func(*args, **kwargs)
                 with self._lock:
                     self._results[task_id] = {"status": "success", "result": result}
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.warning("inline task %s failed: %s", task_id, exc)
                 with self._lock:
                     self._results[task_id] = {"status": "failed", "error": str(exc)}

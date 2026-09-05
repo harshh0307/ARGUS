@@ -3,7 +3,6 @@ from __future__ import annotations
 import threading
 import time
 from collections import deque
-from typing import Any
 
 from app.core.config import Settings
 from app.telemetry.models import TelemetryEvent
@@ -40,7 +39,7 @@ class TelemetryBuffer:
         if self._flush_callback:
             try:
                 self._flush_callback(events)
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
 
         return len(events)

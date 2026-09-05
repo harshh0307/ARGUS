@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
 
 class ContextBuilder:
     """Builds fix context from investigation findings for the fix agent."""

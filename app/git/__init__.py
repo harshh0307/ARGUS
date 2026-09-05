@@ -1,7 +1,10 @@
-from app.git.base import GitProvider, GitRepo, GitPR, GitCheck
+from app.git.base import GitCheck as GitCheck
+from app.git.base import GitPR as GitPR
+from app.git.base import GitProvider
+from app.git.base import GitRepo as GitRepo
+from app.git.bitbucket import BitbucketProvider
 from app.git.github import GitHubProvider
 from app.git.gitlab import GitLabProvider
-from app.git.bitbucket import BitbucketProvider
 
 
 def get_provider(settings, provider: str | None = None) -> GitProvider:

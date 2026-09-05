@@ -1,8 +1,7 @@
 from app.fix.models import PatchSuggestion
-from app.scan.models import DriftSignal
 from app.github.models import CheckResult, PullRequest
 from app.github.pr import build_pr_body, run_pr_loop
-from app.scan.models import Impact, Usage
+from app.scan.models import DriftSignal, Impact, Usage
 
 
 def check(name, conclusion):

@@ -8,22 +8,21 @@ from pydantic import BaseModel
 class VendorOut(BaseModel):
     slug: str
     name: str
-    spec_url: str
-    old_spec_url: str | None = None
-    poll_interval_seconds: int
     enabled: bool
-    is_custom: bool = False
-    spec_source: str = "remote"
+    base_api_url: str | None = None
+    changelog_urls: list[str] = []
+    docs_url: str | None = None
+    fix_guidance: str | None = None
 
 
-class DetectionRunOut(BaseModel):
+class DriftAlertOut(BaseModel):
     id: int
     vendor_slug: str
-    old_digest: str | None = None
-    new_digest: str | None = None
-    breaking_count: int
-    additive_count: int
-    changes: list
+    alert_type: str
+    severity: str
+    endpoint: str | None = None
+    details: dict
+    resolved: bool = False
     created_at: datetime
 
 
@@ -155,7 +154,6 @@ class ActivityEventOut(BaseModel):
 class VendorIn(BaseModel):
     name: str
     slug: str | None = None
-    spec_url: str | None = None
     enabled: bool = True
 
 

@@ -1,7 +1,6 @@
 from app.fix.strategies import ChangeKind
-from app.scan.models import DriftSignal
 from app.scan.impact import assess_impact, match_path
-from app.scan.models import AuthUsage, BodyUsage, HeaderUsage, ResponseUsage, Usage
+from app.scan.models import AuthUsage, BodyUsage, DriftSignal, HeaderUsage, ResponseUsage, Usage
 
 
 def usage(method="get", path="/repos/{owner}/{repo}", line=5, file="app.py"):

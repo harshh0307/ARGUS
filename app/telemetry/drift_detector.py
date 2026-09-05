@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import hashlib
 import json
-import re
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -139,11 +137,7 @@ class DriftDetector:
         return diff
 
     def _is_significant(self, diff: dict) -> bool:
-        if "removed_fields" in diff:
-            return True
-        if "type_changes" in diff:
-            return True
-        return False
+        return "removed_fields" in diff or "type_changes" in diff
 
     def load_baseline(self, endpoint: str, schema: dict) -> None:
         self._baseline_schemas[endpoint] = schema

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -42,7 +41,7 @@ class GitLabProvider(GitProvider):
                 private=data.get("visibility", "private") == "private",
                 provider="gitlab",
             )
-        except Exception:
+        except Exception:  # noqa: BLE001
             return None
 
     def checkout(self, owner: str, name: str, ref: str, dest: Path) -> None:
@@ -53,13 +52,12 @@ class GitLabProvider(GitProvider):
                 params={"sha": ref},
             )
             self._extract_tarball(resp.content, dest)
-        except Exception:
+        except Exception:  # noqa: BLE001
             url = f"https://oauth2:{self._token}@gitlab.com/{owner}/{name}.git"
             self._git_clone(url, ref, dest)
 
     def create_branch(self, owner: str, name: str, branch: str, base: str) -> None:
-        import requests
-        resp = self._request(
+        self._request(
             "POST",
             f"/projects/{self._project_path(owner, name)}/repository/branches",
             json={"branch": branch, "ref": base},
@@ -68,8 +66,6 @@ class GitLabProvider(GitProvider):
     def push_files(self, owner: str, name: str, branch: str, files: dict[str, str]) -> None:
         project = self._project_path(owner, name)
         for filepath, content in files.items():
-            import base64
-            encoded = base64.b64encode(content.encode()).decode()
             self._request(
                 "POST",
                 f"/projects/{project}/repository/files/{filepath}",

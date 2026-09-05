@@ -1,10 +1,10 @@
 """Tests for new scan models: BodyUsage, AuthUsage, ResponseUsage."""
 
 from app.fix.strategies import ChangeKind
-from app.scan.models import DriftSignal
 from app.scan.models import (
     AuthUsage,
     BodyUsage,
+    DriftSignal,
     Impact,
     ResponseUsage,
     Usage,

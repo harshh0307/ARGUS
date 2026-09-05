@@ -12,7 +12,6 @@ from app.db.repository import (
 )
 from app.github.client import GitHubApiError, GitHubClient
 from app.registry.vendors import list_vendors
-from app.services.pipeline import scan_changes, fix_directory
 
 
 def run_repo_pipeline(settings, owner, name, *, branch="main", merge=True, vendor_slug="github", repository_id=None):

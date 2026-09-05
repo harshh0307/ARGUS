@@ -11,7 +11,6 @@ from app.db.repository import (
     upsert_repository,
     upsert_vendor,
 )
-from app.scan.models import DriftSignal
 from app.registry.vendors import Vendor as VendorSpec
 
 

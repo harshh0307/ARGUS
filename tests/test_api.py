@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from app.api.main import create_app
 from app.core.config import Settings
 from app.db.engine import get_engine, init_db, session_factory
-from app.db.models import DetectionRun, Repository, Vendor
+from app.db.models import DriftAlert, Repository, Vendor
 from app.db.repository import set_default_engine
 
 AUTH_SETTINGS = {
@@ -95,9 +95,9 @@ def test_list_vendors(tmp_path):
     response = client.get("/api/v1/vendors", headers=headers)
     assert response.status_code == 200
     slugs = {item["slug"] for item in response.json()}
-    assert slugs == {"github", "stripe", "twilio", "slack", "aws", "azure", "google_cloud"}
+    assert slugs == {"github", "stripe", "twilio", "slack", "aws", "azure", "google_cloud", "plaid", "dwolla"}
     github = next(item for item in response.json() if item["slug"] == "github")
-    assert github["poll_interval_seconds"] == 21600
+    assert github["enabled"] is True
 
 
 def test_vendor_by_slug(tmp_path):
@@ -129,14 +129,12 @@ def test_detection_runs_listing(tmp_path):
     seed(
         engine,
         [
-            Vendor(slug="stripe", name="Stripe", spec_url="https://s"),
-            DetectionRun(
+            Vendor(slug="stripe", name="Stripe"),
+            DriftAlert(
                 vendor_slug="stripe",
-                old_digest="old1",
-                new_digest="new1",
-                breaking_count=2,
-                additive_count=1,
-                changes=[{"kind": "endpoint_removed", "severity": "breaking"}],
+                alert_type="breaking_change",
+                severity="high",
+                details={"old_digest": "old1", "new_digest": "new1", "breaking_count": 2, "additive_count": 1, "changes": [{"kind": "endpoint_removed", "severity": "breaking"}]},
             ),
         ],
     )
@@ -147,12 +145,14 @@ def test_detection_runs_listing(tmp_path):
     rows = response.json()
     assert len(rows) == 1
     assert rows[0]["vendor_slug"] == "stripe"
-    assert rows[0]["breaking_count"] == 2
-    assert rows[0]["changes"][0]["kind"] == "endpoint_removed"
+    assert rows[0]["alert_type"] == "breaking_change"
+    assert rows[0]["severity"] == "high"
+    assert rows[0]["details"]["breaking_count"] == 2
+    assert rows[0]["details"]["changes"][0]["kind"] == "endpoint_removed"
 
     one = client.get(f"/api/v1/detection-runs/{rows[0]['id']}", headers=headers)
     assert one.status_code == 200
-    assert one.json()["new_digest"] == "new1"
+    assert one.json()["details"]["new_digest"] == "new1"
 
     assert client.get("/api/v1/detection-runs/999", headers=headers).status_code == 404
 
@@ -163,9 +163,8 @@ def test_repositories_register_and_list(tmp_path, monkeypatch):
     client = TestClient(make_app(database_url=url))
     headers = register_and_login(client)
 
-    from app.workers.celery_app import app as celery_app_mod
-
-    monkeypatch.setattr(celery_app_mod, "send_task", lambda *a, **kw: None)
+    from app.api import main as api_main
+    monkeypatch.setattr(api_main, "_celery_app", lambda: None)
 
     created = client.post(
         "/api/v1/repositories",

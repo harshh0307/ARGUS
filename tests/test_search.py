@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 from app.api.main import create_app
 from app.core.config import Settings
 from app.db.engine import get_engine, init_db, session_factory
-from app.db.models import ChangelogEntry, Vendor
+from app.db.models import Vendor
 from app.db.repository import (
     record_changelog_entries,
     search_changelog,

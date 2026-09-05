@@ -1,6 +1,6 @@
 from app.db.models import (
-    AppInstallation,
     ApiKey,
+    AppInstallation,
     ChangelogEntry,
     DriftAlert,
     Investigation,
@@ -12,8 +12,8 @@ from app.db.models import (
 )
 
 __all__ = [
-    "AppInstallation",
     "ApiKey",
+    "AppInstallation",
     "ChangelogEntry",
     "DriftAlert",
     "Investigation",

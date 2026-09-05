@@ -55,8 +55,6 @@ def test_run_detection_returns_result(monkeypatch, tmp_path):
 
 
 def test_run_detection_skips_persist_without_database(monkeypatch):
-    called = {"n": 0}
-
     monkeypatch.setattr(tasks, "get_settings", lambda: make_settings(database_url=None))
     monkeypatch.setattr(
         tasks,

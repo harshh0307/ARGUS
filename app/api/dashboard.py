@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.db.models import DriftAlert, Repository
@@ -26,7 +24,6 @@ SettingsDep = Annotated[Settings, Depends(_from_request)]
 
 @router.get("/api/v1/dashboard/stats")
 def dashboard_stats(settings: SettingsDep):
-    from app.auth.deps import CurrentUser
 
     session = open_session(settings)
     try:

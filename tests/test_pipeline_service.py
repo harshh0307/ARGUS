@@ -1,9 +1,7 @@
 
 from types import SimpleNamespace
 
-from app.github.pr import PRLoopResult
-from app.scan.models import DriftSignal
-from app.scan.models import Impact, Usage
+from app.scan.models import DriftSignal, Impact, Usage
 from app.services import pipeline
 
 
