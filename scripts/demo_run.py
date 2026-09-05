@@ -7,7 +7,7 @@ s = get_settings()
 
 from app.db.engine import get_engine, init_db, session_factory
 from app.db.repository import set_default_engine, upsert_repository
-from app.db.models import User, DetectionRun, Vendor, Repository
+from app.db.models import User, DriftAlert, Vendor, Repository
 
 engine = get_engine(s.database_url)
 init_db(engine)
@@ -43,10 +43,10 @@ print(f"Result: breaking={result['breaking_count']} additive={result['additive_c
 
 # 4. Verify DB state
 session = session_factory(engine)()
-runs = session.query(DetectionRun).order_by(DetectionRun.id.desc()).all()
-print(f"\nDetection runs in DB: {len(runs)}")
+runs = session.query(DriftAlert).order_by(DriftAlert.id.desc()).all()
+print(f"\nDrift alerts in DB: {len(runs)}")
 for r in runs:
-    print(f"  #{r.id} vendor={r.vendor_slug} breaking={r.breaking_count} additive={r.additive_count}")
+    print(f"  #{r.id} vendor={r.vendor_slug} type={r.alert_type} severity={r.severity}")
 
 vendors = session.query(Vendor).all()
 print(f"Vendors in DB: {len(vendors)}")

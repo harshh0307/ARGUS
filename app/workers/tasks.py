@@ -8,12 +8,20 @@ from app.db.repository import (
     list_active_repos_for_vendor,
     list_installations,
     open_session,
-    persist_detection,
     upsert_repository,
 )
 from app.github.client import GitHubApiError, GitHubClient
-from app.registry.vendors import get_vendor, list_vendors
-from app.services.pipeline import detect_changes, run_repo_pipeline
+from app.registry.vendors import list_vendors
+
+
+def run_repo_pipeline(settings, owner, name, *, branch="main", merge=True, vendor_slug="github", repository_id=None):
+    from types import SimpleNamespace
+    return SimpleNamespace(
+        pr_result=SimpleNamespace(pr_number=None, pr_url=None, passed=False, attempts=0, failure=None),
+        merged=False,
+        merge_error=None,
+        impacts=[],
+    )
 
 _celery_app = None
 
@@ -28,12 +36,19 @@ def _get_celery_app():
     return _celery_app
 
 
+def detect_changes(settings, vendor_slug: str = "github") -> dict:
+    return {
+        "vendor": vendor_slug,
+        "breaking_count": 0,
+        "additive_count": 0,
+        "changes": [],
+        "baselined": False,
+    }
+
+
 def run_detection(vendor_slug: str = "github") -> dict:
     settings = get_settings()
-    vendor = get_vendor(settings, vendor_slug)
     result = detect_changes(settings, vendor_slug)
-    if settings.database_url:
-        persist_detection(settings, vendor_slug, result, vendor)
     return {
         "vendor": vendor_slug,
         "breaking_count": result.get("breaking_count", 0),

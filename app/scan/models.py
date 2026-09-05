@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-
-from app.detection.models import Change
+from typing import Any
 
 
 @dataclass(frozen=True)
 class Usage:
     """Tracks an API call site in source code (method + path)."""
-
     file: str
     line: int
     method: str
@@ -21,7 +19,6 @@ class Usage:
 @dataclass(frozen=True)
 class HeaderUsage:
     """Tracks a header being set in source code."""
-
     file: str
     line: int
     header_name: str
@@ -35,7 +32,6 @@ class HeaderUsage:
 @dataclass(frozen=True)
 class BodyUsage:
     """Tracks which request body fields a code file accesses."""
-
     file: str
     line: int
     method: str
@@ -51,12 +47,11 @@ class BodyUsage:
 @dataclass(frozen=True)
 class AuthUsage:
     """Tracks authentication patterns in code."""
-
     file: str
     line: int
-    auth_type: str  # "bearer", "api_key", "oauth2", "basic"
+    auth_type: str
     header_name: str | None = None
-    param_name: str | None = None  # for query-param API keys
+    param_name: str | None = None
     scope_used: tuple[str, ...] | None = None
 
     def __str__(self) -> str:
@@ -66,7 +61,6 @@ class AuthUsage:
 @dataclass(frozen=True)
 class ResponseUsage:
     """Tracks how code consumes API responses."""
-
     file: str
     line: int
     method: str
@@ -79,16 +73,40 @@ class ResponseUsage:
         return f"{self.file}:{self.line} handles {self.method.upper()} {self.path} responses [{codes}]"
 
 
-# Union of all usage types for Impact
 AnyUsage = Usage | BodyUsage | AuthUsage | ResponseUsage | HeaderUsage
+
+
+@dataclass
+class DriftSignal:
+    """Represents a detected API drift signal (replaces old Change class)."""
+    kind: str
+    severity: str  # "breaking" | "additive" | "deprecation" | "warning"
+    path: str = ""
+    method: str = ""
+    detail: str = ""
+    old_value: Any = None
+    new_value: Any = None
+
+    @property
+    def category(self) -> str:
+        if "schema" in self.kind.lower() or "property" in self.kind.lower():
+            return "schema"
+        if "param" in self.kind.lower():
+            return "parameter"
+        if "response" in self.kind.lower():
+            return "response"
+        if "security" in self.kind.lower() or "auth" in self.kind.lower():
+            return "security"
+        if "endpoint" in self.kind.lower() or "method" in self.kind.lower():
+            return "endpoint"
+        return "other"
 
 
 @dataclass(frozen=True)
 class Impact:
-    """Links a code usage to a spec change that affects it."""
-
+    """Links a code usage to a drift signal that affects it."""
     usage: AnyUsage
-    change: Change
+    change: DriftSignal
 
     def __str__(self) -> str:
         return f"{self.usage.file}:{self.usage.line} affected by [{self.change.severity}] {self.change.kind}"

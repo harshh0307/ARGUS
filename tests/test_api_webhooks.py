@@ -8,7 +8,7 @@ from app.api.main import create_app
 from app.core.config import Settings
 from app.db import repository as repo_mod
 from app.db.engine import get_engine, init_db, session_factory
-from app.db.models import AppInstallation, DetectionRun, Repository, Vendor
+from app.db.models import AppInstallation, DriftAlert, Repository, Vendor
 from app.db.repository import set_default_engine
 
 
@@ -365,13 +365,13 @@ def test_dispatch_falls_back_to_inline_thread_when_broker_down(
     )
     ran = {"called": False}
 
-    def raise_broker(*args, **kwargs):
-        raise ConnectionError("broker unreachable")
-
     from app.api import main as api_main
     from app.workers import tasks as worker_tasks
 
-    monkeypatch.setattr(api_main.celery_app, "send_task", raise_broker)
+    def raise_broker(*args, **kwargs):
+        raise ConnectionError("broker unreachable")
+
+    monkeypatch.setattr(api_main, "_celery_app", lambda: type("FakeApp", (), {"send_task": staticmethod(raise_broker)})())
     monkeypatch.setattr(worker_tasks, "scan_and_fix", lambda *a, **k: ran.update(called=True))
 
     client = TestClient(make_app(database_url=url, webhook_secret="s3cret"))
@@ -400,14 +400,14 @@ def test_detection_runs_ordered_newest_first(tmp_path):
     engine = seeded_engine(tmp_path)
     url = engine.url.render_as_string(hide_password=False)
     session = session_factory(engine)()
-    session.add(Vendor(slug="stripe", name="Stripe", spec_url="https://s"))
+    session.add(Vendor(slug="stripe", name="Stripe"))
     for i in range(3):
         session.add(
-            DetectionRun(
+            DriftAlert(
                 vendor_slug="stripe",
-                new_digest=f"digest{i}",
-                breaking_count=i,
-                changes=[],
+                alert_type="breaking_change",
+                severity="medium",
+                details={"new_digest": f"digest{i}", "breaking_count": i, "changes": []},
             )
         )
     session.commit()
@@ -416,8 +416,8 @@ def test_detection_runs_ordered_newest_first(tmp_path):
     client = TestClient(make_app(database_url=url))
     headers = register_and_login(client)
     rows = client.get("/api/v1/detection-runs", headers=headers).json()
-    assert [r["new_digest"] for r in rows] == ["digest2", "digest1", "digest0"]
-    assert [r["breaking_count"] for r in rows] == [2, 1, 0]
+    assert [r["details"]["new_digest"] for r in rows] == ["digest2", "digest1", "digest0"]
+    assert [r["details"]["breaking_count"] for r in rows] == [2, 1, 0]
 
 
 def test_repositories_require_database(monkeypatch):

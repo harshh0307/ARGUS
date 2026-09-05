@@ -3,7 +3,6 @@
 import time
 from unittest.mock import MagicMock
 
-from app.detection.models import ChangeKind
 from app.fix.ast_validators import (
     validate_csharp,
     validate_go,
@@ -17,13 +16,12 @@ from app.fix.ast_validators import (
 from app.fix.circuit_breaker import CircuitBreaker, MultiLLMRouter
 from app.fix.models import FixResult, FixStrategy, PatchSuggestion
 from app.fix.semantic_guards import run_semantic_guard
-from app.fix.state import create_initial_state
 from app.fix.strategies import (
+    ChangeKind,
     get_strategy,
     needs_llm,
     register_strategy,
 )
-from app.fix.token_manager import ScopedToken, TokenManager
 
 # ── PatchSuggestion tests ───────────────────────────────────────────────────
 
@@ -269,33 +267,6 @@ class TestSemanticGuards:
         assert result is None
 
 
-# ── State tests ─────────────────────────────────────────────────────────────
-
-
-class TestFixState:
-    def test_create_initial_state(self):
-        state = create_initial_state(
-            impact={"kind": "test"},
-            file_path="app.py",
-            file_content="x = 1",
-        )
-        assert state["attempts"] == 0
-        assert state["patch_history"] == []
-        assert state["error_history"] == []
-        assert state["installation_token"] is None
-
-    def test_history_trimming(self):
-        from app.fix.state import _trim_history
-
-        reducer = _trim_history(10)
-        # Simulate adding items one by one
-        history = []
-        for i in range(15):
-            history = reducer(history, [f"patch_{i}"])
-        assert len(history) == 10
-        assert history[-1] == "patch_14"
-
-
 # ── Circuit Breaker tests ───────────────────────────────────────────────────
 
 
@@ -367,54 +338,3 @@ class TestMultiLLMRouter:
         router = MultiLLMRouter([("openai", mock_client)])
         states = router.get_provider_states()
         assert states["openai"] == "closed"
-
-
-# ── Token Manager tests ─────────────────────────────────────────────────────
-
-
-class TestScopedToken:
-    def test_construction(self):
-        t = ScopedToken(token="ghp_abc123", repository_id=1)
-        assert t.token == "ghp_abc123"
-        assert bool(t) is True
-
-    def test_destroy(self):
-        t = ScopedToken(token="ghp_abc123", repository_id=1)
-        t.destroy()
-        assert t.token == ""
-        assert bool(t) is False
-
-    def test_double_destroy(self):
-        t = ScopedToken(token="ghp_abc123", repository_id=1)
-        t.destroy()
-        t.destroy()  # should not raise
-
-
-class TestTokenManager:
-    def test_destroy_all(self):
-        tm = TokenManager()
-        tm._active_tokens = [
-            ScopedToken(token="a", repository_id=1),
-            ScopedToken(token="b", repository_id=2),
-        ]
-        tm.destroy_all()
-        assert tm.active_count == 0
-
-    def test_destroy_for_repo(self):
-        tm = TokenManager()
-        tm._active_tokens = [
-            ScopedToken(token="a", repository_id=1),
-            ScopedToken(token="b", repository_id=2),
-            ScopedToken(token="c", repository_id=1),
-        ]
-        tm.destroy_for_repo(1)
-        assert tm.active_count == 1
-        assert tm._active_tokens[0].repository_id == 2
-
-    def test_active_count(self):
-        tm = TokenManager()
-        tm._active_tokens = [
-            ScopedToken(token="a", repository_id=1),
-            ScopedToken(token="b", repository_id=2),
-        ]
-        assert tm.active_count == 2

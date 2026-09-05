@@ -18,42 +18,23 @@
             <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">Disabled</span>
             {% endif %}
         </div>
-        <div class="text-sm text-gray-500">Poll: {{ (v.poll_interval_seconds // 3600) }}h</div>
-    </div>
-    <div class="px-6 py-3 bg-gray-50 border-b border-gray-100">
-        <div class="text-xs text-gray-500 truncate">Spec: <a href="{{ v.spec_url }}" class="text-blue-600 hover:underline" target="_blank">{{ v.spec_url }}</a></div>
+        {% if v.base_api_url %}
+        <div class="text-sm text-gray-500 truncate">API: <a href="{{ v.base_api_url }}" class="text-blue-600 hover:underline" target="_blank">{{ v.base_api_url }}</a></div>
+        {% endif %}
     </div>
 
-    {% if v.runs %}
-    <table class="w-full">
-        <thead>
-            <tr class="text-left text-xs text-gray-500 uppercase">
-                <th class="px-6 py-3">Run ID</th>
-                <th class="px-6 py-3">Breaking</th>
-                <th class="px-6 py-3">Additive</th>
-                <th class="px-6 py-3">Old Digest</th>
-                <th class="px-6 py-3">New Digest</th>
-                <th class="px-6 py-3">Time</th>
-            </tr>
-        </thead>
-        <tbody class="divide-y divide-gray-50">
-            {% for r in v.runs %}
-            <tr class="hover:bg-gray-50 text-sm">
-                <td class="px-6 py-3 text-gray-600">#{{ r.id }}</td>
-                <td class="px-6 py-3">
-                    <span class="{% if r.breaking_count > 0 %}text-red-600 font-medium{% else %}text-gray-400{% endif %}">{{ r.breaking_count }}</span>
-                </td>
-                <td class="px-6 py-3 text-green-600">{{ r.additive_count }}</td>
-                <td class="px-6 py-3 text-gray-400 font-mono text-xs">{{ r.old_digest }}...</td>
-                <td class="px-6 py-3 text-gray-400 font-mono text-xs">{{ r.new_digest }}...</td>
-                <td class="px-6 py-3 text-gray-500">{% if r.created_at %}{{ r.created_at.strftime('%Y-%m-%d %H:%M') }}{% endif %}</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-    {% else %}
-    <div class="px-6 py-8 text-center text-gray-400 text-sm">No detection runs for this vendor yet.</div>
+    {% if v.docs_url or v.fix_guidance %}
+    <div class="px-6 py-3 bg-gray-50 border-b border-gray-100">
+        {% if v.docs_url %}
+        <div class="text-xs text-gray-500">Docs: <a href="{{ v.docs_url }}" class="text-blue-600 hover:underline" target="_blank">{{ v.docs_url }}</a></div>
+        {% endif %}
+        {% if v.fix_guidance %}
+        <div class="text-xs text-gray-600 mt-1">{{ v.fix_guidance[:120] }}{% if v.fix_guidance|length > 120 %}...{% endif %}</div>
+        {% endif %}
+    </div>
     {% endif %}
+
+    <div class="px-6 py-8 text-center text-gray-400 text-sm">Vendor registered. Use the API to manage detection runs.</div>
 </div>
 {% endfor %}
 {% endblock %}

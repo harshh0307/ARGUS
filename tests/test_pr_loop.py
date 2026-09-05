@@ -1,8 +1,7 @@
-from app.detection.models import BREAKING, Change
 from app.fix.models import PatchSuggestion
 from app.github.models import CheckResult, PullRequest
 from app.github.pr import build_pr_body, run_pr_loop
-from app.scan.models import Impact, Usage
+from app.scan.models import DriftSignal, Impact, Usage
 
 
 def check(name, conclusion):
@@ -12,7 +11,7 @@ def check(name, conclusion):
 def impact(file, line, path="/repos/{owner}/{repo}/tags/protection"):
     return Impact(
         usage=Usage(file=str(file), line=line, method="get", path=path),
-        change=Change("endpoint_removed", BREAKING, path, "get", "endpoint is no longer documented"),
+        change=DriftSignal(kind="endpoint_removed", severity="breaking", path=path, method="get", detail="endpoint is no longer documented"),
     )
 
 

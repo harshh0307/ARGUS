@@ -1,9 +1,10 @@
 """Tests for new scan models: BodyUsage, AuthUsage, ResponseUsage."""
 
-from app.detection.models import Change, ChangeKind
+from app.fix.strategies import ChangeKind
 from app.scan.models import (
     AuthUsage,
     BodyUsage,
+    DriftSignal,
     Impact,
     ResponseUsage,
     Usage,
@@ -108,7 +109,7 @@ class TestResponseUsage:
 class TestImpact:
     def test_with_usage(self):
         u = Usage(file="app.py", line=10, method="get", path="/users")
-        c = Change(
+        c = DriftSignal(
             kind=ChangeKind.ENDPOINT_REMOVED,
             severity="breaking",
             path="/users",
@@ -120,7 +121,7 @@ class TestImpact:
 
     def test_with_body_usage(self):
         b = BodyUsage(file="app.py", line=10, method="post", path="/users")
-        c = Change(
+        c = DriftSignal(
             kind=ChangeKind.REQUEST_BODY_REMOVED,
             severity="breaking",
             path="/users",
@@ -131,7 +132,7 @@ class TestImpact:
 
     def test_with_auth_usage(self):
         a = AuthUsage(file="app.py", line=5, auth_type="bearer")
-        c = Change(
+        c = DriftSignal(
             kind=ChangeKind.SECURITY_SCHEME_TYPE_CHANGED,
             severity="breaking",
             path="/",
@@ -142,7 +143,7 @@ class TestImpact:
 
     def test_str(self):
         u = Usage(file="app.py", line=10, method="get", path="/users")
-        c = Change(
+        c = DriftSignal(
             kind=ChangeKind.ENDPOINT_REMOVED,
             severity="breaking",
             path="/users",

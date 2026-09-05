@@ -3,7 +3,6 @@ from types import SimpleNamespace
 from app.db.engine import get_engine, init_db, session_factory
 from app.db.repository import set_default_engine
 from app.workers import tasks
-from app.workers.celery_app import app as celery_app
 
 
 def make_settings(**overrides):
@@ -17,24 +16,13 @@ def make_settings(**overrides):
         "openai_api_key": "k",
         "openrouter_api_key": None,
         "openrouter_model": None,
-        "snapshot_dir": "data/snapshots",
         "database_url": None,
     }
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
 
 
-def test_celery_app_registers_tasks():
-    names = {t.name for t in celery_app.tasks.values() if t.name.startswith("argus.")}
-    assert "argus.poll_all_vendors" in names
-    assert "argus.run_detection" in names
-    assert "argus.scan_and_fix" in names
-    assert "argus.register_repository" in names
-    beat = celery_app.conf.beat_schedule["poll-all-vendors"]
-    assert beat["task"] == "argus.poll_all_vendors"
-
-
-def test_run_detection_task_calls_service(monkeypatch, tmp_path):
+def test_run_detection_task_calls_service(monkeypatch):
     captured = {}
 
     def fake_detect(settings, vendor_slug="github"):
@@ -48,9 +36,7 @@ def test_run_detection_task_calls_service(monkeypatch, tmp_path):
         }
 
     monkeypatch.setattr(tasks, "detect_changes", fake_detect)
-    monkeypatch.setattr(tasks, "get_vendor", lambda settings, slug: SimpleNamespace(slug=slug))
     monkeypatch.setattr(tasks, "get_settings", lambda: make_settings())
-    monkeypatch.setattr(tasks, "persist_detection", lambda *a: None)
 
     result = tasks.run_detection("github")
 

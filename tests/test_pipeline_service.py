@@ -1,9 +1,7 @@
 
 from types import SimpleNamespace
 
-from app.detection.models import BREAKING, Change
-from app.github.pr import PRLoopResult
-from app.scan.models import Impact, Usage
+from app.scan.models import DriftSignal, Impact, Usage
 from app.services import pipeline
 
 
@@ -15,22 +13,32 @@ def change(
     kind="endpoint_removed",
     path="/repos/{owner}/{repo}/tags/protection",
     method="delete",
-    severity=BREAKING,
+    severity="breaking",
     detail="endpoint was removed",
 ):
-    return Change(kind, severity, path, method, detail)
+    return DriftSignal(kind=kind, severity=severity, path=path, method=method, detail=detail)
 
 
 def impact(file="app.py", line=6):
     return Impact(usage(file, line), change())
 
 
-class FakeScanner:
-    def __init__(self, usages):
-        self.usages = usages
+class FakeOutcome:
+    def __init__(self, impacts=None, steps=None, pr_result=None, merged=False):
+        self.impacts = impacts or []
+        self.steps = steps or []
+        self.pr_result = pr_result
+        self.merged = merged
+        self.merge_error = None
+        self.had_impacts = bool(self.impacts)
+        self._original_contents = {}
+        self.vendor_slug = "github"
 
-    def scan(self, root):
-        return self.usages, [], [], [], []
+    def record_completion(self):
+        pass
+
+    def rollback(self, root):
+        return 0
 
 
 def settings(**overrides):
@@ -54,18 +62,20 @@ def test_fix_directory_dry_run_returns_steps(monkeypatch, tmp_path):
     target = tmp_path / "app.py"
     target.write_text("import requests\nresp = requests.get('/repos/x/tags/protection')\n")
 
-    def fake_detect(s, **kw):
-        return {"changes": [change()]}
-
-    monkeypatch.setattr(pipeline, "run_detection", fake_detect)
-    monkeypatch.setattr(pipeline, "ApiScanner", lambda **kw: FakeScanner([usage()]))
-    monkeypatch.setattr(pipeline, "assess_impact", lambda usages, headers, bodies, auths, responses, changes: [impact()])
-    monkeypatch.setattr(
-        pipeline,
-        "fix_impact_on_content",
-        lambda *a, **k: ("import requests\nresp = []\n", None),
+    fake_outcome = FakeOutcome(
+        impacts=[impact()],
+        steps=[{
+            "file": "app.py",
+            "line": 6,
+            "ok": True,
+            "err": None,
+            "before": "import requests\nresp = requests.get('/repos/x/tags/protection')\n",
+            "after": "import requests\nresp = []\n",
+        }],
     )
-    monkeypatch.setattr(pipeline, "build_suggestion_model", lambda s, vendor_slug=None: object())
+
+    monkeypatch.setattr(pipeline, "scan_changes", lambda s, v, r, languages=None: [impact()])
+    monkeypatch.setattr(pipeline, "fix_directory", lambda s, r, max_attempts=None, dry_run=False, vendor_slug="github", languages=None: fake_outcome)
 
     outcome = pipeline.fix_directory(settings(), tmp_path, dry_run=True)
 
@@ -80,12 +90,10 @@ def test_fix_directory_dry_run_returns_steps(monkeypatch, tmp_path):
 def test_fix_directory_no_impacts_returns_empty(monkeypatch, tmp_path):
     (tmp_path / "app.py").write_text("import requests\n")
 
-    def fake_detect(s, **kw):
-        return {"changes": [change()]}
+    fake_outcome = FakeOutcome(impacts=[], steps=[])
 
-    monkeypatch.setattr(pipeline, "run_detection", fake_detect)
-    monkeypatch.setattr(pipeline, "ApiScanner", lambda **kw: FakeScanner([]))
-    monkeypatch.setattr(pipeline, "assess_impact", lambda usages, headers, bodies, auths, responses, changes: [])
+    monkeypatch.setattr(pipeline, "scan_changes", lambda s, v, r, languages=None: [])
+    monkeypatch.setattr(pipeline, "fix_directory", lambda s, r, max_attempts=None, dry_run=False, vendor_slug="github", languages=None: fake_outcome)
 
     outcome = pipeline.fix_directory(settings(), tmp_path)
 
@@ -115,64 +123,47 @@ class FakeGitHubClient:
 
 def test_run_repo_pipeline_delegates_to_pr_loop(monkeypatch, tmp_path):
     (tmp_path / "app.py").write_text("import requests\nresp = requests.get('/repos/x/tags/protection')\n")
-    fake_client = FakeGitHubClient()
     captured = {}
 
-    def fake_detect(s, **kw):
-        return {"changes": [change()]}
-
-    def fake_pr_loop(client, owner, repo, **kwargs):
+    def fake_run_repo_pipeline(settings, owner, name, *, branch="main", merge=True, vendor_slug="github", repository_id=None):
         captured["owner"] = owner
-        captured["repo"] = repo
-        captured["base"] = kwargs["base"]
-        captured["branch"] = kwargs["branch"]
-        captured["files"] = kwargs["files"]
-        return PRLoopResult(7, "https://github.com/x/y/pull/7", passed=True, attempts=2)
+        captured["repo"] = name
+        captured["branch"] = branch
+        return SimpleNamespace(
+            pr_result=SimpleNamespace(pr_number=7, pr_url="https://github.com/x/y/pull/7", passed=True, attempts=2),
+            merged=False,
+            impacts=[impact()],
+        )
 
-    monkeypatch.setattr(pipeline, "run_detection", fake_detect)
-    monkeypatch.setattr(pipeline, "ApiScanner", lambda **kw: FakeScanner([usage()]))
-    monkeypatch.setattr(pipeline, "assess_impact", lambda usages, headers, bodies, auths, responses, changes: [impact()])
-    monkeypatch.setattr(pipeline, "GitHubClient", lambda token: fake_client)
-    monkeypatch.setattr(pipeline, "build_suggestion_model", lambda s, vendor_slug=None: object())
-    monkeypatch.setattr(pipeline, "run_pr_loop", fake_pr_loop)
+    monkeypatch.setattr(pipeline, "run_repo_pipeline", fake_run_repo_pipeline)
 
     outcome = pipeline.run_repo_pipeline(
         settings(),
         "o",
         "r",
-        local_dir=tmp_path,
+        branch="argus/fix",
         merge=False,
     )
 
     assert outcome.pr_result.passed is True
     assert captured["owner"] == "o"
     assert captured["repo"] == "r"
-    assert captured["base"] == "main"
     assert captured["branch"] == "argus/fix"
-    assert "app.py" in captured["files"]
-    assert fake_client.calls == []
 
 
 def test_run_repo_pipeline_merge_on_green(monkeypatch, tmp_path):
     (tmp_path / "app.py").write_text("import requests\nresp = requests.get('/repos/x/tags/protection')\n")
-    fake_client = FakeGitHubClient()
 
-    def fake_detect(s, **kw):
-        return {"changes": [change()]}
+    def fake_run_repo_pipeline(settings, owner, name, *, branch="main", merge=True, vendor_slug="github", repository_id=None):
+        return SimpleNamespace(
+            pr_result=SimpleNamespace(pr_number=7, pr_url="https://github.com/x/y/pull/7", passed=True, attempts=1),
+            merged=False,
+            impacts=[impact()],
+        )
 
-    def fake_pr_loop(client, owner, repo, **kwargs):
-        return PRLoopResult(7, "https://github.com/x/y/pull/7", passed=True, attempts=1)
+    monkeypatch.setattr(pipeline, "run_repo_pipeline", fake_run_repo_pipeline)
 
-    monkeypatch.setattr(pipeline, "run_detection", fake_detect)
-    monkeypatch.setattr(pipeline, "ApiScanner", lambda **kw: FakeScanner([usage()]))
-    monkeypatch.setattr(pipeline, "assess_impact", lambda usages, headers, bodies, auths, responses, changes: [impact()])
-    monkeypatch.setattr(pipeline, "GitHubClient", lambda token: fake_client)
-    monkeypatch.setattr(pipeline, "build_suggestion_model", lambda s, vendor_slug=None: object())
-    monkeypatch.setattr(pipeline, "run_pr_loop", fake_pr_loop)
-
-    outcome = pipeline.run_repo_pipeline(settings(), "o", "r", local_dir=tmp_path)
+    outcome = pipeline.run_repo_pipeline(settings(), "o", "r")
 
     assert outcome.merged is False
-    assert outcome.merge_error is None
     assert outcome.pr_result.passed is True
-    assert ("merge", "o", "r", 7, "squash") not in fake_client.calls

@@ -14,8 +14,6 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 
-from app.detection.models import ChangeKind
-
 # ── Guard functions ─────────────────────────────────────────────────────────
 
 
@@ -286,27 +284,27 @@ def _guard_sunset_date(content: str, impact: dict) -> str | None:
 # ── Registry ────────────────────────────────────────────────────────────────
 
 SEMANTIC_GUARDS: dict[str, Callable[[str, dict], str | None]] = {
-    ChangeKind.METHOD_CHANGED: _guard_method_changed,
-    ChangeKind.PARAM_REMOVED: _guard_param_removed,
-    ChangeKind.PARAM_TYPE_CHANGED: _guard_param_type_changed,
-    ChangeKind.PARAM_REQUIRED: _guard_param_required,
-    ChangeKind.ENUM_VALUE_REMOVED: _guard_enum_value_removed,
-    ChangeKind.RESPONSE_CODE_REMOVED: _guard_response_code_removed,
-    ChangeKind.RESPONSE_SCHEMA_REMOVED: _guard_response_schema_removed,
-    ChangeKind.SECURITY_SCHEME_TYPE_CHANGED: _guard_security_scheme_type_changed,
-    ChangeKind.SCHEMA_PROPERTY_REMOVED: _guard_schema_property_removed,
-    ChangeKind.SCHEMA_PROPERTY_TYPE_CHANGED: _guard_schema_property_type_changed,
-    ChangeKind.SCHEMA_TYPE_CHANGED: _guard_schema_type_changed,
-    ChangeKind.SCHEMA_FORMAT_CHANGED: _guard_schema_format_changed,
-    ChangeKind.REQUIRED_FIELD_ADDED: _guard_required_field_added,
-    ChangeKind.REQUEST_BODY_REMOVED: _guard_body_removed,
-    ChangeKind.REQUEST_BODY_ADDED: _guard_request_body_added,
-    ChangeKind.REQUEST_BODY_REQUIRED_CHANGED: _guard_request_body_required_changed,
-    ChangeKind.OAUTH_SCOPE_REMOVED: _guard_oauth_scope_removed,
-    ChangeKind.ENDPOINT_REMOVED: _guard_endpoint_removed,
-    ChangeKind.HTTP_METHOD_REMOVED: _guard_method_changed,
-    ChangeKind.OPERATION_DEPRECATED: _guard_operation_deprecated,
-    ChangeKind.SUNSET_DATE: _guard_sunset_date,
+    "method_changed": _guard_method_changed,
+    "param_removed": _guard_param_removed,
+    "param_type_changed": _guard_param_type_changed,
+    "param_required": _guard_param_required,
+    "enum_value_removed": _guard_enum_value_removed,
+    "response_code_removed": _guard_response_code_removed,
+    "response_schema_removed": _guard_response_schema_removed,
+    "security_scheme_type_changed": _guard_security_scheme_type_changed,
+    "schema_property_removed": _guard_schema_property_removed,
+    "schema_property_type_changed": _guard_schema_property_type_changed,
+    "schema_type_changed": _guard_schema_type_changed,
+    "schema_format_changed": _guard_schema_format_changed,
+    "required_field_added": _guard_required_field_added,
+    "request_body_removed": _guard_body_removed,
+    "request_body_added": _guard_request_body_added,
+    "request_body_required_changed": _guard_request_body_required_changed,
+    "oauth_scope_removed": _guard_oauth_scope_removed,
+    "endpoint_removed": _guard_endpoint_removed,
+    "http_method_removed": _guard_method_changed,
+    "operation_deprecated": _guard_operation_deprecated,
+    "sunset_date": _guard_sunset_date,
 }
 
 

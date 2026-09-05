@@ -1,6 +1,5 @@
 from types import SimpleNamespace
 
-from app.detection.models import BREAKING
 from app.fix.agent import build_suggestion_model
 from app.fix.prompt import build_prompt
 from app.registry.vendors import get_vendor, list_vendors
@@ -14,8 +13,6 @@ def make_settings(**overrides):
         "openai_api_key": None,
         "openrouter_api_key": "or-key",
         "openrouter_model": "fallback-model",
-        "github_spec_url": "https://example.com/github.json",
-        "github_old_spec_url": None,
         "api_base_url": "https://api.github.com",
     }
     defaults.update(overrides)
@@ -29,7 +26,7 @@ def impact_dict():
         "method": "get",
         "path": "/repos/x",
         "change_kind": "endpoint_removed",
-        "change_severity": BREAKING,
+        "change_severity": "breaking",
         "change_path": "/repos/x",
         "change_detail": "endpoint is no longer documented",
         "language": "py",
@@ -39,7 +36,10 @@ def impact_dict():
 def test_vendors_carry_fix_guidance():
     settings = make_settings()
     slugs = {v.slug for v in list_vendors(settings)}
-    assert slugs == {"github", "stripe", "twilio", "slack", "aws", "azure", "google_cloud"}
+    assert "github" in slugs
+    assert "stripe" in slugs
+    assert "plaid" in slugs
+    assert "dwolla" in slugs
     for slug in slugs:
         vendor = get_vendor(settings, slug)
         assert vendor.fix_guidance, f"{slug} should carry fix guidance"
@@ -83,7 +83,7 @@ def test_build_suggestion_model_custom_vendor_model():
     from app.fix.agent import SuggestionModel
 
     model = build_suggestion_model(
-        make_settings(github_spec_url="https://example.com"),
+        make_settings(),
         vendor_slug="github",
     )
     assert isinstance(model, SuggestionModel)

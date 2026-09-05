@@ -10,19 +10,17 @@ from app.db.engine import init_db, session_factory
 from app.db.models import (
     AppInstallation,
     ChangelogEntry,
-    DetectionRun,
+    DriftAlert,
+    Investigation,
     Repository,
-    SpecSnapshot,
+    TelemetryEvent,
     Vendor,
 )
 from app.registry.vendors import Vendor as VendorSpec
-from app.search.embeddings import build_embedder, cosine_similarity, embed_text
+from app.search.embeddings import cosine_similarity
 
 DEFAULT_ENGINE = None
 
-# URLs whose schema has already been initialised in this process. Without this,
-# open_session ran init_db -> create_all on *every* call, adding a metadata
-# round-trip to every API request.
 _SCHEMA_READY: set[str] = set()
 
 
@@ -54,84 +52,8 @@ def upsert_vendor(session: Session, spec: VendorSpec) -> Vendor:
         row = Vendor(slug=spec.slug, name=spec.name)
         session.add(row)
     row.name = spec.name
-    row.spec_url = spec.spec_url
-    row.old_spec_url = spec.old_spec_url
-    row.poll_interval_seconds = spec.poll_interval_seconds
     row.enabled = spec.enabled
     return row
-
-
-def record_snapshot(
-    session: Session, vendor_slug: str, digest: str, etag: str | None = None
-) -> SpecSnapshot:
-    existing = session.execute(
-        select(SpecSnapshot).where(
-            SpecSnapshot.vendor_slug == vendor_slug, SpecSnapshot.digest == digest
-        )
-    ).scalar_one_or_none()
-    if existing is not None:
-        return existing
-    row = SpecSnapshot(vendor_slug=vendor_slug, digest=digest, etag=etag)
-    session.add(row)
-    return row
-
-
-def record_detection_run(
-    session: Session, vendor_slug: str, result: dict, tenant_id: str | None = None,
-) -> DetectionRun:
-    row = DetectionRun(
-        vendor_slug=vendor_slug,
-        tenant_id=tenant_id,
-        old_digest=result.get("old_digest"),
-        new_digest=result.get("new_digest"),
-        breaking_count=result.get("breaking_count", 0),
-        additive_count=result.get("additive_count", 0),
-        changes=[
-            {
-                "kind": c.kind,
-                "severity": c.severity,
-                "path": c.path,
-                "method": c.method,
-                "detail": c.detail,
-            }
-            for c in result.get("changes", [])
-        ],
-    )
-    session.add(row)
-    return row
-
-
-def persist_detection(
-    settings: Settings, vendor_slug: str, result: dict, spec: VendorSpec,
-    tenant_id: str | None = None,
-) -> DetectionRun | None:
-    if not settings.database_url:
-        return None
-    session = open_session(settings)
-    try:
-        upsert_vendor(session, spec)
-        if result.get("old_digest"):
-            record_snapshot(session, vendor_slug, result["old_digest"])
-        if result.get("new_digest"):
-            record_snapshot(session, vendor_slug, result["new_digest"])
-        run = record_detection_run(session, vendor_slug, result, tenant_id=tenant_id)
-        session.flush()
-        embedder = build_embedder(settings)
-        record_changelog_entries(
-            session,
-            vendor_slug,
-            run,
-            run.changes,
-            embedder=embedder,
-            tenant_id=tenant_id,
-        )
-        session.commit()
-        return run
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()
 
 
 def upsert_repository(
@@ -139,6 +61,7 @@ def upsert_repository(
     owner: str,
     name: str,
     default_branch: str | None = None,
+    git_provider: str = "github",
     vendor_slug: str = "github",
     tenant_id: str | None = None,
 ) -> Repository:
@@ -150,11 +73,12 @@ def upsert_repository(
     if row is None:
         row = Repository(
             owner=owner, name=name, default_branch=default_branch,
-            vendor_slug=vendor_slug, tenant_id=tenant_id,
+            git_provider=git_provider, vendor_slug=vendor_slug, tenant_id=tenant_id,
         )
         session.add(row)
     else:
         row.default_branch = default_branch or row.default_branch
+        row.git_provider = git_provider or row.git_provider
         row.vendor_slug = vendor_slug or row.vendor_slug
         if tenant_id is not None:
             row.tenant_id = tenant_id
@@ -215,30 +139,106 @@ def list_installations(session: Session, tenant_id: str | None = None) -> list[A
     return list(session.execute(stmt).scalars())
 
 
+def record_telemetry_event(
+    session: Session,
+    vendor_slug: str,
+    endpoint: str,
+    method: str,
+    path: str,
+    status_code: int,
+    drift_detected: bool = False,
+    drift_details: dict | None = None,
+    response_schema_hash: str | None = None,
+    request_body_hash: str | None = None,
+    tenant_id: str | None = None,
+) -> TelemetryEvent:
+    row = TelemetryEvent(
+        vendor_slug=vendor_slug,
+        tenant_id=tenant_id,
+        endpoint=endpoint,
+        method=method,
+        path=path,
+        status_code=status_code,
+        drift_detected=drift_detected,
+        drift_details=drift_details,
+        response_schema_hash=response_schema_hash,
+        request_body_hash=request_body_hash,
+        captured_at=datetime.now(UTC),
+    )
+    session.add(row)
+    return row
+
+
+def create_drift_alert(
+    session: Session,
+    vendor_slug: str,
+    alert_type: str,
+    severity: str,
+    details: dict,
+    endpoint: str | None = None,
+    tenant_id: str | None = None,
+) -> DriftAlert:
+    row = DriftAlert(
+        vendor_slug=vendor_slug,
+        tenant_id=tenant_id,
+        alert_type=alert_type,
+        severity=severity,
+        endpoint=endpoint,
+        details=details,
+    )
+    session.add(row)
+    session.flush()
+    return row
+
+
+def resolve_drift_alert(session: Session, alert_id: int) -> None:
+    row = session.get(DriftAlert, alert_id)
+    if row is not None:
+        row.resolved = True
+
+
+def create_investigation(
+    session: Session,
+    drift_alert_id: int,
+    vendor_slug: str,
+    changelog_snippets: list | None = None,
+    doc_references: list | None = None,
+    context_summary: str | None = None,
+    confidence_score: float | None = None,
+) -> Investigation:
+    row = Investigation(
+        drift_alert_id=drift_alert_id,
+        vendor_slug=vendor_slug,
+        changelog_snippets=changelog_snippets,
+        doc_references=doc_references,
+        context_summary=context_summary,
+        confidence_score=confidence_score,
+    )
+    session.add(row)
+    session.flush()
+    return row
+
+
 def record_changelog_entries(
     session: Session,
     vendor_slug: str,
-    run: DetectionRun,
-    changes: list,
+    entries: list[dict],
     embedder=None,
-    tenant_id: str | None = None,
 ) -> list[ChangelogEntry]:
     texts = [
-        embed_text(c.get("kind", "change"), c.get("path", ""), c.get("method", ""), c.get("detail"))
-        for c in changes
+        f"{e.get('title', '')} | {e.get('content', '')[:200]}"
+        for e in entries
     ]
     vectors = embedder(texts) if embedder is not None and texts else None
     rows: list[ChangelogEntry] = []
-    for index, c in enumerate(changes):
+    for index, e in enumerate(entries):
         rows.append(
             ChangelogEntry(
                 vendor_slug=vendor_slug,
-                tenant_id=tenant_id,
-                run_id=run.id,
-                kind=c.get("kind", "change"),
-                path=c.get("path", ""),
-                method=c.get("method", ""),
-                detail=c.get("detail"),
+                source_url=e.get("source_url", ""),
+                title=e.get("title", ""),
+                content=e.get("content", ""),
+                published_at=e.get("published_at"),
                 embedding=vectors[index] if vectors is not None else None,
             )
         )
@@ -257,11 +257,6 @@ def search_changelog(
     statement = select(ChangelogEntry)
     if vendor_slug:
         statement = statement.where(ChangelogEntry.vendor_slug == vendor_slug)
-    if tenant_id is not None:
-        statement = statement.where(
-            (ChangelogEntry.tenant_id == tenant_id)
-            | (ChangelogEntry.tenant_id.is_(None))
-        )
     rows = list(session.execute(statement).scalars())
     if not rows:
         return []
@@ -282,8 +277,22 @@ def search_changelog(
     terms = [t for t in query.lower().split() if t]
     scored = []
     for row in rows:
-        haystack = " ".join([row.kind, row.path, row.method, row.detail or ""]).lower()
+        haystack = " ".join([row.title, row.content[:500]]).lower()
         score = sum(1 for t in terms if t in haystack)
         if score > 0:
             scored.append((row, float(score)))
     return sorted(scored, key=lambda item: item[1], reverse=True)[:limit]
+
+
+def list_open_drift_alerts(
+    session: Session,
+    vendor_slug: str | None = None,
+    tenant_id: str | None = None,
+) -> list[DriftAlert]:
+    stmt = select(DriftAlert).where(DriftAlert.resolved.is_(False))
+    if vendor_slug:
+        stmt = stmt.where(DriftAlert.vendor_slug == vendor_slug)
+    if tenant_id is not None:
+        stmt = stmt.where(DriftAlert.tenant_id == tenant_id)
+    stmt = stmt.order_by(DriftAlert.created_at.desc())
+    return list(session.execute(stmt).scalars())

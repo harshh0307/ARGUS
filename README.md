@@ -171,40 +171,119 @@ scripts/
 tests/             # pytest suite (710 tests)
 ```
 
-## Setup
+## Quickstart
 
-Requires Python 3.14.
+The fastest way to get Argus running is Docker Compose. It spins up Postgres, Redis, the API, workers, and the dashboard in one command.
+
+### Prerequisites
+
+- **Docker Desktop** (or Docker Engine + Compose v2) — [install](https://docs.docker.com/get-docker/)
+- **Git**
+- A **GitHub personal access token** (classic PAT with `repo` scope) — needed for `argus pr` and the demo. Skip if you only want to explore the API/dashboard.
+
+### 1. Clone & configure
+
+```bash
+git clone https://github.com/harshh0307/ARGUS.git
+cd ARGUS
+
+# Copy the example env and edit it
+Copy-Item .env.example .env   # Windows
+# cp .env.example .env        # Linux/Mac
+```
+
+Open `.env` and set at minimum:
+
+| Variable | What to set |
+|---|---|
+| `DATABASE_URL` | `postgresql+psycopg://argus:argus@postgres:5432/argus` (default for Docker) |
+| `REDIS_URL` | `redis://redis:6379/0` (default for Docker) |
+| `AUTH_SECRET_KEY` | Run `python -c "import secrets; print(secrets.token_urlsafe(64))"` and paste the output |
+| `GITHUB_TOKEN` | Your GitHub PAT (only needed for `argus pr` / webhooks) |
+| `OPENAI_API_KEY` or `GEMINI_API_KEY` | Only needed for the LLM fix agent |
+
+Everything else has sensible defaults.
+
+### 2. Start everything
+
+```bash
+docker compose up -d            # API on :8000, dashboard on :3000
+docker compose logs -f api      # watch the API logs
+```
+
+Compose starts 6 services: `postgres`, `redis`, `api`, `worker`, `beat`, `dashboard`. Postgres and Redis have healthchecks; the API waits for both.
+
+### 3. Verify it works
+
+```bash
+# Health check
+curl http://localhost:8000/health
+# {"status":"ok","database":true}
+
+# Register a user
+curl -X POST http://localhost:8000/api/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"you@example.com","password":"changeme","name":"Admin"}'
+
+# Login
+curl -X POST http://localhost:8000/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"you@example.com","password":"changeme"}'
+# Copy the access_token from the response
+
+# List vendors (requires auth)
+curl http://localhost:8000/api/v1/vendors \
+  -H "Authorization: Bearer <access_token>"
+
+# Open the dashboard
+# http://localhost:3000  (register / login there too)
+```
+
+### 4. Run a detection (optional)
+
+```bash
+# Detect breaking changes across all 7 vendors
+docker compose exec api python -m argus detect
+
+# Or detect a single vendor
+docker compose exec api python -m argus detect --vendor stripe
+```
+
+### Local development (without Docker)
+
+Requires **Python 3.14** and **Node.js 20+**.
 
 ```powershell
+# Backend
 python -m venv .venv
 .\.venv\Scripts\activate
 pip install -e ".[dev]"
+
+Copy-Item .env.example .env    # edit as needed
+uvicorn app.api.main:app --host 0.0.0.0 --port 8000
+
+# Frontend (separate terminal)
+cd web
+npm install
+npm run dev                     # http://localhost:3000
 ```
 
-Copy `.env.example` to `.env` and fill in at least:
+### Environment reference
 
-```powershell
-Copy-Item .env.example .env
-```
-
-| Variable | Required for | Notes |
+| Variable | Required for | Default |
 |---|---|---|
-| `GITHUB_TOKEN` | `argus pr`, demo | classic PAT; scopes: `repo`, `workflow` |
-| `GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY` / `GITHUB_INSTALL_ID` | alternative to `GITHUB_TOKEN` | GitHub App with repo-access install; tokens auto-renew per request |
-| `WEBHOOK_SECRET` | `api` webhook receiver | verifies `X-Hub-Signature-256`; push events trigger `scan_and_fix` |
-| `GEMINI_API_KEY` / `OPENAI_API_KEY` | `argus fix`, `argus pr` | any OpenAI-compatible provider works via `LLM_BASE_URL` |
-| `OPENROUTER_API_KEY` | fallback when primary LLM is rate-limited | free model: `nvidia/nemotron-3-ultra-550b-a55b:free` (verified) |
-| `OPENROUTER_MODEL` | — | default `nvidia/nemotron-3-ultra-550b-a55b:free` |
-| `LLM_MODEL` | — | default `gpt-4o-mini` |
-| `EMBEDDING_API_KEY` / `EMBEDDING_BASE_URL` / `EMBEDDING_MODEL` | semantic changelog search | OpenAI-compatible embeddings endpoint (default `text-embedding-3-small`); keyword fallback without it. **Tip:** your OpenRouter key works — set `EMBEDDING_BASE_URL=https://openrouter.ai/api/v1` + `EMBEDDING_MODEL=openai/text-embedding-3-small` (free, verified) |
-| `DATABASE_URL` | `argus detect` persistence, API read endpoints, **all auth** | optional for the CLI, required for the API; `sqlite:///data/argus.db` or `postgresql+psycopg://...` (docker-compose has Postgres 16) |
-| `AUTH_SECRET_KEY` | every authenticated endpoint | **must be changed before deploying** — the default `change-me-in-production` makes every JWT forgeable |
-| `AUTH_ALGORITHM` / `ACCESS_TOKEN_EXPIRE_MINUTES` | — | default `HS256`, `30` |
-| `RATE_LIMIT_DEFAULT` / `RATE_LIMIT_AUTH` / `RATE_LIMIT_WEBHOOK` | — | slowapi strings; default `60/minute`, `10/minute`, `30/minute` |
-| `NEXT_PUBLIC_API_URL` | `web/` dashboard | where the browser reaches the API; compose sets `http://api:8000` |
-| `HTTP_TIMEOUT_SECONDS` / `HTTP_MAX_RETRIES` | — | spec fetching; default `30.0`, `3` |
-| `LLM_TIMEOUT_SECONDS` | — | per-request LLM timeout; default `60` |
-| `SEARCH_LIMIT` | — | default changelog search result count; default `10` |
+| `DATABASE_URL` | API, auth, detection persistence | — (set for Docker) |
+| `REDIS_URL` | Celery workers | `redis://localhost:6379/0` |
+| `AUTH_SECRET_KEY` | JWT signing | `change-me-in-production` (**change this!**) |
+| `GITHUB_TOKEN` | `argus pr`, webhooks | — |
+| `GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY` / `GITHUB_INSTALL_ID` | GitHub App auth (alt to PAT) | — |
+| `WEBHOOK_SECRET` | webhook HMAC verification | — |
+| `OPENAI_API_KEY` / `GEMINI_API_KEY` | LLM fix agent | — |
+| `LLM_MODEL` | LLM model name | `gpt-4o-mini` |
+| `OPENROUTER_API_KEY` | free-tier fallback on 429 | — |
+| `EMBEDDING_API_KEY` / `EMBEDDING_BASE_URL` / `EMBEDDING_MODEL` | semantic search (keyword fallback without) | — |
+| `NEXT_PUBLIC_API_URL` | dashboard → API URL | `http://localhost:8000` |
+| `RATE_LIMIT_DEFAULT` / `RATE_LIMIT_AUTH` / `RATE_LIMIT_WEBHOOK` | rate limits | `60/minute`, `10/minute`, `30/minute` |
 
 ## Usage
 
